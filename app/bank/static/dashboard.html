@@ -332,7 +332,7 @@
             <li><span id="ft-who">…</span>
               <div class="cmd"><code id="ft-kill">docker kill …</code><button data-copy="ft-kill">Copy</button></div>
               <div class="look">…or simply turn off that laptop's Wi-Fi.</div></li>
-            <li>Watch the right side and the cluster cards above: the old primary turns <b>red</b>, and within about 20 seconds <b>another node becomes primary</b>.</li>
+            <li>Watch the right side and the cluster cards above: the old primary turns <b>red</b>, and within about 30–40 seconds <b>another node becomes primary</b>.</li>
             <li>Bring the old node back. It rejoins as a <b>replica</b> and catches up on its own:
               <div class="cmd"><code id="ft-start">docker start …</code><button data-copy="ft-start">Copy</button></div></li>
           </ol>
@@ -378,7 +378,7 @@
             <li>Send ₹500 from A-1001 to B-1001 and crash.
               <div class="ctrl"><button class="btn danger" id="rc-go">Send &amp; crash coordinator</button></div>
               <div class="look">The coordinator turns red, and a transfer is stuck <b>“in doubt”</b> with its rows locked.</div></li>
-            <li><b>Wait about 10 seconds.</b> A standby coordinator on another laptop wins the election, reads the shared log and resolves the transfer: <b>in doubt goes back to 0</b> and the total returns to <b>₹22,00,000</b>.
+            <li><b>Wait about 15 seconds.</b> A standby coordinator on another laptop wins the election, reads the shared log and resolves the transfer: <b>in doubt goes back to 0</b> and the total returns to <b>₹22,00,000</b>.
               <div class="look">Only one coordinator running? Then nobody can take over: restart it yourself and it recovers on startup.</div></li>
             <li>Restart the crashed coordinator<span id="rc-where"></span>. It rejoins as a <b>standby</b>:
               <div class="cmd"><code id="rc-start">docker start coordinator</code><button data-copy="rc-start">Copy</button></div></li>
@@ -724,7 +724,7 @@ function renderFailover(s) {
   if (f.downAt) {
     const secs = Math.round((Date.now() - f.downAt) / 1000);
     status = `<div class="big-status" style="color:var(--warn)">⏳ Electing a new primary… ${secs} s</div>
-      <div class="muted"><b class="mono">${esc(f.oldPrimary)}</b> is gone. The replicas wait for its lock in etcd to expire (about 20 s), then one is promoted.</div>`;
+      <div class="muted"><b class="mono">${esc(f.oldPrimary)}</b> is gone. The replicas wait for its lock in etcd to expire (about 30 s), then one is promoted.</div>`;
   } else if (f.newPrimary && f.doneAt && Date.now() - f.doneAt < 5 * 60 * 1000) {
     status = `<div class="big-status" style="color:var(--ok)">✓ Failover complete${f.took != null ? ` in ${f.took} s` : ""}</div>
       <div class="muted"><b class="mono">${esc(f.newPrimary)}</b> took over as primary${f.oldPrimary ? ` from <b class="mono">${esc(f.oldPrimary)}</b>` : ""}. Writes work again.</div>`;
@@ -757,7 +757,7 @@ function renderCoordFailover(s) {
   let status;
   if (f.downAt) {
     status = `<div class="big-status" style="color:var(--warn)">⏳ Electing a new coordinator… ${Math.round((Date.now() - f.downAt) / 1000)} s</div>
-      <div class="muted"><b class="mono">${esc(f.oldPrimary)}</b> stopped renewing its lease in etcd. When it expires (10 s), a standby takes the leader key and runs recovery.</div>`;
+      <div class="muted"><b class="mono">${esc(f.oldPrimary)}</b> stopped renewing its lease in etcd. When it expires (15 s), a standby takes the leader key and runs recovery.</div>`;
   } else if (f.newPrimary && f.doneAt && Date.now() - f.doneAt < 5 * 60 * 1000 && f.oldPrimary) {
     status = `<div class="big-status" style="color:var(--ok)">✓ New coordinator leader${f.took != null ? ` in ${f.took} s` : ""}</div>
       <div class="muted"><b class="mono">${esc(f.newPrimary)}</b> took over from <b class="mono">${esc(f.oldPrimary)}</b> and finished any half-done transfers from the shared log.</div>`;

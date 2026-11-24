@@ -13,11 +13,12 @@ The algorithm (etcd lease + compare-and-set):
      /distbank/coordinator/leader, attached to its lease, *only if the key
      does not exist yet* (etcd transaction: create_revision == 0).
      etcd is linearizable, so at most one coordinator can win this.
-  3. If the leader crashes or loses its network, it stops renewing. 10 s later
+  3. If the leader crashes or loses its network, it stops renewing. 15 s later
      etcd deletes the key, and the next standby to try (every 2 s) wins.
-  4. Safety: a leader that cannot renew its lease for 6 s (TTL minus a 4 s
+  4. Safety: a leader that cannot renew its lease for 10 s (TTL minus a 5 s
      margin) steps down on its own, before etcd could possibly hand the key to
      someone else. So two coordinators never both believe they are leader.
+     (Timings are sized for campus Wi-Fi, where a request can take 1-2 s.)
 
 The new leader then runs crash recovery from the replicated coordinator log,
 finishing or rolling back whatever the old leader left half-done.
@@ -38,9 +39,10 @@ import httpx
 
 LEADER_KEY = "/distbank/coordinator/leader"
 MEMBERS_PREFIX = "/distbank/coordinator/members/"
-TTL = 10            # seconds a lease lives without renewal
+TTL = 15            # seconds a lease lives without renewal
 RENEW_EVERY = 2     # seconds between renewals / election attempts
-SAFETY = 4          # step down if not renewed for TTL - SAFETY seconds
+SAFETY = 5          # step down if not renewed for TTL - SAFETY seconds
+REQUEST_TIMEOUT = 3.0   # per etcd request: campus Wi-Fi can take 1-2 s under load
 
 
 def _b64(s: str) -> str:
@@ -54,7 +56,7 @@ def _unb64(s: str) -> str:
 _last_good = {}      # etcd endpoint list -> index of the member that last answered
 
 
-def _post(etcd: str, path: str, body: dict, timeout: float = 2.0) -> dict:
+def _post(etcd: str, path: str, body: dict, timeout: float = REQUEST_TIMEOUT) -> dict:
     """POST to one etcd member; if it is down (or cut off from the majority),
     try the next. `etcd` is one URL or several, comma-separated."""
     endpoints = [e.strip().rstrip("/") for e in etcd.split(",") if e.strip()]

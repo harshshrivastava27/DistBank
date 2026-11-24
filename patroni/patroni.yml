@@ -9,9 +9,9 @@ bootstrap:
   # Cluster-wide settings. Written to etcd once, when the first node of a
   # cluster initialises it; every node then reads them from etcd.
   dcs:
-    ttl: 20                      # leader lock expires after 20 s without renewal
+    ttl: 30                      # leader lock expires after 30 s without renewal
     loop_wait: 2                 # each node re-checks cluster state every 2 s
-    retry_timeout: 5
+    retry_timeout: 10            # tolerate slow etcd answers (Wi-Fi) before demoting
     maximum_lag_on_failover: 1048576
     # Synchronous replication: a commit (or PREPARE TRANSACTION) is only
     # acknowledged once a standby has it too, so failover never loses an

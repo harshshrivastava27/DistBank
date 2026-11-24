@@ -19,7 +19,7 @@ stopped. After this switch:
 - **etcd runs on all three laptops** (one member each). Elections keep working
   while any 2 of the 3 are up, so any one laptop can be switched off.
 - **Every laptop runs a coordinator candidate.** They elect one leader through
-  etcd; if it dies, another takes over in about 10 s and finishes any
+  etcd; if it dies, another takes over in about 15 s and finishes any
   half-done transfer from the shared log.
 - **All three laptops run the same code**, from
   https://github.com/harshshrivastava27/DistBank

@@ -151,7 +151,7 @@ What to watch:
 - In the load generator, the `FAILED` transfer column is non-zero only during the gap, and the reads `FAILED` column stays at **0** the whole time, because replicas keep answering. Transfers inside Branch B never stop.
 - When it settles, the total is back to ₹22,00,000.00.
 
-A hard kill takes about 20 to 30 seconds to fail over, because the others must wait for the dead primary's leader lock to expire (20 s). To show a planned switchover instead, use `./demo.sh stop-primary a`: the primary hands over the lock as it shuts down and the gap is about 5 to 10 seconds.
+A hard kill takes about 30 to 40 seconds to fail over, because the others must wait for the dead primary's leader lock to expire (30 s; sized for slow campus Wi-Fi, see `patroni.yml`). To show a planned switchover instead, use `./demo.sh stop-primary a`: the primary hands over the lock as it shuts down and the gap is about 5 to 10 seconds.
 
 ### Step 5. Bring the node back: database recovery (1 min)
 
@@ -245,7 +245,7 @@ Everything can be done with the dashboard plus a few `docker` commands. Use the 
 
 - `synchronous_mode: true`. The primary only acknowledges a commit, or a `PREPARE TRANSACTION`, after one replica has it too. Failover therefore never loses an acknowledged transaction. Without this, a failover could silently drop a prepared transaction that the coordinator has already decided to commit.
 - `max_prepared_transactions: 64`. PostgreSQL ships with 0, which disables two-phase commit.
-- `ttl: 20`. The leader lock in etcd expires 20 seconds after a primary stops renewing it. That is what bounds failover time after a hard kill.
+- `ttl: 30`, `retry_timeout: 10`. The leader lock in etcd expires 30 seconds after a primary stops renewing it, which bounds failover time after a hard kill. Both were raised from 20 / 5 for campus Wi-Fi, where etcd answers can take 1-2 s: with the smaller values a healthy primary could step down just because etcd was slow.
 - `use_pg_rewind: true`. Lets a crashed ex-primary rejoin as a replica without a full re-copy.
 - `failsafe_mode: true`. If etcd itself is unreachable, a primary stays primary as long as it can still reach every other node of its cluster, so an etcd outage alone does not stop writes.
 
@@ -289,10 +289,10 @@ The coordinator can restart while a branch is completely down. It remembers in i
 
 Several coordinators run, one per laptop; exactly one is the **leader** and accepts transfers (`app/bank/leader.py`):
 
-1. Each coordinator holds an etcd **lease** (10 s time-to-live) and renews it every 2 s.
+1. Each coordinator holds an etcd **lease** (15 s time-to-live) and renews it every 2 s.
 2. To lead, it creates the key `/distbank/coordinator/leader` attached to its lease **only if the key does not exist** (an etcd transaction on `create_revision == 0`). etcd is linearizable, so only one can win.
 3. If the leader dies, its lease expires and etcd deletes the key; the next standby to try wins, **runs recovery from the log**, and then serves. A planned stop revokes the lease, so the handover is immediate.
-4. A leader that cannot renew for 6 s steps down by itself, before its lease can expire, so two coordinators never both act as leader. As a second fence, the COMMIT decision is a compare-and-set on the log (`... WHERE state = 'STARTED'`): if a new leader already presumed the transfer aborted, the old leader's commit is refused.
+4. A leader that cannot renew for 10 s steps down by itself, before its lease can expire, so two coordinators never both act as leader. As a second fence, the COMMIT decision is a compare-and-set on the log (`... WHERE state = 'STARTED'`): if a new leader already presumed the transfer aborted, the old leader's commit is refused.
 
 In this mode the coordinator's log is the `coordlog` database inside Branch A's replicated cluster, so every candidate reads the same log and it survives the loss of any one laptop.
 
@@ -370,12 +370,12 @@ You can also connect any SQL client straight to the clusters through HAProxy: ho
 
 ## 10. Known limits (good answers for question time)
 
-- **On one laptop, the coordinator is a single point of failure for cross-branch transfers.** While it is down, prepared transactions stay locked: the classic blocking weakness of two-phase commit. The multi-laptop mode (section 12) removes it with a standby coordinator elected through etcd, which takes over in about 10 s; real systems go further and replicate the commit decision itself (Paxos/Raft commit, as in Spanner or CockroachDB).
+- **On one laptop, the coordinator is a single point of failure for cross-branch transfers.** While it is down, prepared transactions stay locked: the classic blocking weakness of two-phase commit. The multi-laptop mode (section 12) removes it with a standby coordinator elected through etcd, which takes over in about 15 s; real systems go further and replicate the commit decision itself (Paxos/Raft commit, as in Spanner or CockroachDB).
 - **On one laptop, etcd is a single node.** If it dies, the databases keep running (failsafe mode) but no failover can happen until it is back. The multi-laptop mode runs 3 etcd members, one per laptop, which survive the loss of any one.
 - **HAProxy is a single node too.** Restarting it is harmless, but while it is down nothing can reach the databases. Production runs two with a floating IP.
 - **Two-phase commit gives atomicity, not cross-shard isolation.** Between "committed on A" and "committed on B" (normally a few milliseconds) a reader that sums both branches sees the money missing. The dashboard labels this "settling". A globally consistent snapshot needs more machinery (global timestamps or snapshot coordination).
 - **Replica reads can be slightly stale.** One replica is synchronous for durability, but "received" is not "applied", and the other replica is asynchronous. `?consistent=true` reads from the primary.
-- **Failover is not instant.** Writes to the affected branch fail for about 5 to 10 s (clean stop) or 20 to 30 s (hard kill). The client is expected to retry.
+- **Failover is not instant.** Writes to the affected branch fail for about 5 to 10 s (clean stop) or 30 to 40 s (hard kill). The client is expected to retry.
 - **Passwords are hard-coded demo values** in `patroni.yml`, `config.py` and `docker-compose.yml`.
 
 ## 11. How this was tested
@@ -429,7 +429,7 @@ The same system spread over three laptops on one Wi-Fi network. Each laptop runs
 - **one node of each branch** (so each branch has its 3 copies on 3 laptops),
 - **a coordinator candidate** with its own HAProxy and dashboard (one leader is elected, the rest stand by).
 
-Switching off any one laptop is survived: Patroni promotes new primaries, a standby coordinator takes over and finishes any half-done transfer, and transfers resume after about 30 seconds (database failover about 20 s, coordinator takeover about 10 s, partly in parallel).
+Switching off any one laptop is survived: Patroni promotes new primaries, a standby coordinator takes over and finishes any half-done transfer, and transfers resume after about 40 seconds (database failover about 30-40 s, coordinator takeover about 15 s, partly in parallel). The timings are deliberately generous for campus Wi-Fi: etcd uses a 500 ms heartbeat and 5 s election timeout instead of the LAN defaults (100 ms / 1 s).
 
 Setup, from the `multi` folder, with **the same `cluster.env` on every laptop** (laptop IPs, which nodes run where, `ETCD_IPS`, `LAPTOP_NAMES`):
 

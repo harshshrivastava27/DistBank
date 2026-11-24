@@ -23,6 +23,11 @@ services:
       ETCD_INITIAL_CLUSTER: ${ETCD_INITIAL_CLUSTER}
       ETCD_INITIAL_CLUSTER_STATE: new
       ETCD_INITIAL_CLUSTER_TOKEN: distbank-etcd
+      # Tuned for campus Wi-Fi (25-400 ms between laptops, not < 10 ms like a
+      # wired LAN). Heartbeat ~ the worst round trip, election 10x heartbeat;
+      # the 100 ms / 1000 ms defaults made members lose their leader constantly.
+      ETCD_HEARTBEAT_INTERVAL: "500"
+      ETCD_ELECTION_TIMEOUT: "5000"
     ports:
       - "2379:2379"     # clients: Patroni, coordinators, dashboard
       - "2380:2380"     # the other etcd members
