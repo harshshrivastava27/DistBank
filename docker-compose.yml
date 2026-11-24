@@ -1,0 +1,176 @@
+# Distributed Bank - advanced database demo
+#
+#   etcd                      leader-election store used by Patroni
+#   pg-a1, pg-a2, pg-a3       Branch A: 1 primary + 2 replicas (PostgreSQL + Patroni)
+#   pg-b1, pg-b2, pg-b3       Branch B: 1 primary + 2 replicas
+#   haproxy                   routes writes to primaries, load-balances reads
+#   coord-db                  the transaction coordinator's own durable log
+#   coordinator               bank API + two-phase commit coordinator  (localhost:8000)
+#   dashboard                 live status page                         (localhost:8080)
+#   loadgen                   optional traffic generator (docker compose run --rm loadgen)
+
+x-pg-node: &pg-node
+  build: ./patroni
+  image: distbank-patroni
+  depends_on:
+    - etcd
+  stop_grace_period: 30s
+
+x-app: &app
+  build: ./app
+  image: distbank-app
+  environment: &app-env
+    PYTHONUNBUFFERED: "1"
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
+    container_name: etcd
+    command:
+      - etcd
+      - --name=etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd=http://etcd:2380
+    volumes:
+      - etcd-data:/etcd-data
+
+  # ---------------- Branch A ----------------
+  pg-a1:
+    <<: *pg-node
+    container_name: pg-a1
+    hostname: pg-a1
+    environment:
+      PATRONI_NAME: pg-a1
+      PATRONI_SCOPE: branch-a
+      PATRONI_ETCD3_HOSTS: etcd:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-a1:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-a1:5432
+    volumes:
+      - pg-a1-data:/var/lib/postgresql/data
+  pg-a2:
+    <<: *pg-node
+    container_name: pg-a2
+    hostname: pg-a2
+    environment:
+      PATRONI_NAME: pg-a2
+      PATRONI_SCOPE: branch-a
+      PATRONI_ETCD3_HOSTS: etcd:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-a2:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-a2:5432
+    volumes:
+      - pg-a2-data:/var/lib/postgresql/data
+  pg-a3:
+    <<: *pg-node
+    container_name: pg-a3
+    hostname: pg-a3
+    environment:
+      PATRONI_NAME: pg-a3
+      PATRONI_SCOPE: branch-a
+      PATRONI_ETCD3_HOSTS: etcd:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-a3:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-a3:5432
+    volumes:
+      - pg-a3-data:/var/lib/postgresql/data
+
+  # ---------------- Branch B ----------------
+  pg-b1:
+    <<: *pg-node
+    container_name: pg-b1
+    hostname: pg-b1
+    environment:
+      PATRONI_NAME: pg-b1
+      PATRONI_SCOPE: branch-b
+      PATRONI_ETCD3_HOSTS: etcd:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-b1:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-b1:5432
+    volumes:
+      - pg-b1-data:/var/lib/postgresql/data
+  pg-b2:
+    <<: *pg-node
+    container_name: pg-b2
+    hostname: pg-b2
+    environment:
+      PATRONI_NAME: pg-b2
+      PATRONI_SCOPE: branch-b
+      PATRONI_ETCD3_HOSTS: etcd:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-b2:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-b2:5432
+    volumes:
+      - pg-b2-data:/var/lib/postgresql/data
+  pg-b3:
+    <<: *pg-node
+    container_name: pg-b3
+    hostname: pg-b3
+    environment:
+      PATRONI_NAME: pg-b3
+      PATRONI_SCOPE: branch-b
+      PATRONI_ETCD3_HOSTS: etcd:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-b3:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-b3:5432
+    volumes:
+      - pg-b3-data:/var/lib/postgresql/data
+
+  haproxy:
+    image: haproxy:2.8
+    container_name: haproxy
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      # host:container. Host ports avoid 5000 and 7000, which macOS AirPlay uses.
+      - "8404:7000"   # statistics page   -> http://localhost:8404
+      - "5500:5000"   # Branch A writes   (for SQL clients on your machine)
+      - "5501:5001"   # Branch A reads
+      - "5502:5002"   # Branch B writes
+      - "5503:5003"   # Branch B reads
+    depends_on: [pg-a1, pg-a2, pg-a3, pg-b1, pg-b2, pg-b3]
+
+  coord-db:
+    image: postgres:16
+    container_name: coord-db
+    environment:
+      POSTGRES_USER: coord
+      POSTGRES_PASSWORD: coord-demo
+      POSTGRES_DB: coord
+    volumes:
+      - coord-data:/var/lib/postgresql/data
+
+  coordinator:
+    <<: *app
+    container_name: coordinator
+    command: ["uvicorn", "bank.coordinator:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    depends_on: [haproxy, coord-db]
+    # Deliberately no restart policy: in the crash demo the coordinator must
+    # stay down until you start it again, so the stuck transaction is visible.
+    restart: "no"
+
+  dashboard:
+    <<: *app
+    container_name: dashboard
+    command: ["uvicorn", "bank.dashboard:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    depends_on: [haproxy, coord-db]
+
+  loadgen:
+    <<: *app
+    container_name: loadgen
+    command: ["python", "-m", "bank.loadgen"]
+    profiles: ["tools"]
+
+# Named volumes keep all data across "docker compose down". To wipe everything
+# and start from scratch: docker compose --profile tools down -v
+volumes:
+  coord-data:
+  etcd-data:
+  pg-a1-data:
+  pg-a2-data:
+  pg-a3-data:
+  pg-b1-data:
+  pg-b2-data:
+  pg-b3-data:

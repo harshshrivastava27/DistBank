@@ -1,0 +1,53 @@
+# Patroni configuration shared by all six PostgreSQL nodes.
+# Per-node values (node name, cluster name, addresses, etcd host) are supplied
+# through PATRONI_* environment variables in docker-compose.yml.
+
+restapi:
+  listen: 0.0.0.0:8008          # HAProxy health-checks this: /primary and /replica
+
+bootstrap:
+  # Cluster-wide settings. Written to etcd once, when the first node of a
+  # cluster initialises it; every node then reads them from etcd.
+  dcs:
+    ttl: 20                      # leader lock expires after 20 s without renewal
+    loop_wait: 2                 # each node re-checks cluster state every 2 s
+    retry_timeout: 5
+    maximum_lag_on_failover: 1048576
+    # Synchronous replication: a commit (or PREPARE TRANSACTION) is only
+    # acknowledged once a standby has it too, so failover never loses an
+    # acknowledged transaction. Required for two-phase commit to be safe.
+    synchronous_mode: true
+    # If etcd itself becomes unreachable, a primary normally steps down to be
+    # safe. With failsafe mode it stays primary as long as it can still reach
+    # every other node of its cluster directly, so an etcd outage alone does
+    # not stop writes. (No failover is possible until etcd is back.)
+    failsafe_mode: true
+    postgresql:
+      use_pg_rewind: true        # lets a crashed ex-primary rejoin as a replica
+      parameters:
+        max_connections: 100
+        max_prepared_transactions: 64   # 0 by default = two-phase commit disabled
+        wal_level: replica
+        hot_standby: "on"
+        wal_log_hints: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+postgresql:
+  listen: 0.0.0.0:5432
+  data_dir: /var/lib/postgresql/data/pgdata
+  bin_dir: /usr/lib/postgresql/16/bin
+  authentication:
+    superuser:
+      username: postgres
+      password: postgres-demo
+    replication:
+      username: replicator
+      password: replicator-demo
+  pg_hba:
+    - local all all trust
+    - host replication replicator 0.0.0.0/0 scram-sha-256
+    - host all all 0.0.0.0/0 scram-sha-256

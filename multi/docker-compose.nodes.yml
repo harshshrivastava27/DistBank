@@ -1,0 +1,104 @@
+# Database laptops. Each node is a profile; a laptop starts only its own nodes:
+#   ./multi/cluster.sh node pg-a1 pg-b2 up
+#
+# Every node publishes its own two ports so several can share one laptop:
+#   node    Postgres  Patroni API          node    Postgres  Patroni API
+#   pg-a1   5411      8011                 pg-b1   5421      8021
+#   pg-a2   5412      8012                 pg-b2   5422      8022
+#   pg-a3   5413      8013                 pg-b3   5423      8023
+# Other nodes and HAProxy reach it at <this laptop's IP>:<those ports>.
+name: distbank-nodes
+
+x-pg-node: &pg-node
+  build: ../patroni
+  image: distbank-patroni
+  stop_grace_period: 30s
+
+services:
+  pg-a1:
+    <<: *pg-node
+    container_name: pg-a1
+    profiles: ["pg-a1"]
+    hostname: pg-a1
+    ports: ["5411:5432", "8011:8008"]
+    environment:
+      PATRONI_NAME: pg-a1
+      PATRONI_SCOPE: branch-a
+      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_A1_IP}:8011
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_A1_IP}:5411
+    volumes: [pg-a1-data:/var/lib/postgresql/data]
+  pg-a2:
+    <<: *pg-node
+    container_name: pg-a2
+    profiles: ["pg-a2"]
+    hostname: pg-a2
+    ports: ["5412:5432", "8012:8008"]
+    environment:
+      PATRONI_NAME: pg-a2
+      PATRONI_SCOPE: branch-a
+      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_A2_IP}:8012
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_A2_IP}:5412
+    volumes: [pg-a2-data:/var/lib/postgresql/data]
+  pg-a3:
+    <<: *pg-node
+    container_name: pg-a3
+    profiles: ["pg-a3"]
+    hostname: pg-a3
+    ports: ["5413:5432", "8013:8008"]
+    environment:
+      PATRONI_NAME: pg-a3
+      PATRONI_SCOPE: branch-a
+      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_A3_IP}:8013
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_A3_IP}:5413
+    volumes: [pg-a3-data:/var/lib/postgresql/data]
+
+  pg-b1:
+    <<: *pg-node
+    container_name: pg-b1
+    profiles: ["pg-b1"]
+    hostname: pg-b1
+    ports: ["5421:5432", "8021:8008"]
+    environment:
+      PATRONI_NAME: pg-b1
+      PATRONI_SCOPE: branch-b
+      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_B1_IP}:8021
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_B1_IP}:5421
+    volumes: [pg-b1-data:/var/lib/postgresql/data]
+  pg-b2:
+    <<: *pg-node
+    container_name: pg-b2
+    profiles: ["pg-b2"]
+    hostname: pg-b2
+    ports: ["5422:5432", "8022:8008"]
+    environment:
+      PATRONI_NAME: pg-b2
+      PATRONI_SCOPE: branch-b
+      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_B2_IP}:8022
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_B2_IP}:5422
+    volumes: [pg-b2-data:/var/lib/postgresql/data]
+  pg-b3:
+    <<: *pg-node
+    container_name: pg-b3
+    profiles: ["pg-b3"]
+    hostname: pg-b3
+    ports: ["5423:5432", "8023:8008"]
+    environment:
+      PATRONI_NAME: pg-b3
+      PATRONI_SCOPE: branch-b
+      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_B3_IP}:8023
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_B3_IP}:5423
+    volumes: [pg-b3-data:/var/lib/postgresql/data]
+
+volumes:
+  pg-a1-data:
+  pg-a2-data:
+  pg-a3-data:
+  pg-b1-data:
+  pg-b2-data:
+  pg-b3-data:
