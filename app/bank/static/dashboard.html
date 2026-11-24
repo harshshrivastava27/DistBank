@@ -103,6 +103,12 @@
   .badge.sync { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok-line); }
   .badge.replica { background: var(--surface); color: var(--ink-2); border: 1px solid var(--line); }
   .badge.down { background: var(--bad); color: #fff; }
+  .badge.leader { background: var(--violet); color: #fff; }
+  .badge.standby { background: var(--surface); color: var(--ink-2); border: 1px solid var(--line); }
+  .coords { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .coord { border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; background: var(--surface-2); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .coord.leader { border-color: color-mix(in srgb, var(--violet) 45%, var(--line)); background: var(--violet-soft); }
+  .coord .name { font-family: var(--mono); font-weight: 650; font-size: 13.5px; }
   .badge.other { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-line); }
 
   /* demo guide */
@@ -241,6 +247,7 @@
 
   <!-- CLUSTER: who is where -->
   <section class="branches" id="branches"></section>
+  <section class="card" id="coordinators" style="display:none"></section>
 
   <!-- DEMO GUIDE -->
   <section class="demo">
@@ -315,10 +322,10 @@
       <!-- 4. FAULT TOLERANCE -->
       <div class="panel" data-panel="ft">
         <div>
-          <p class="idea">If a branch's <b>primary crashes</b>, Patroni notices (via etcd) and <b>automatically promotes a replica</b> to primary. Nobody has to step in.</p>
+          <p class="idea">If a branch's <b>primary crashes</b>, Patroni notices (via etcd) and <b>automatically promotes a replica</b>. If the <b>coordinator leader crashes</b>, the standby coordinators <b>elect a new leader</b> the same way. Nobody has to step in.</p>
           <ol class="guide">
             <li>Choose a branch.
-              <div class="ctrl"><div class="seg" id="ft-branch"><button class="on" data-b="A">Branch A</button><button data-b="B">Branch B</button></div></div></li>
+              <div class="ctrl"><div class="seg" id="ft-branch"><button class="on" data-b="A">Branch A</button><button data-b="B">Branch B</button><button data-b="C">Coordinator</button></div></div></li>
             <li><span id="ft-who">…</span>
               <div class="cmd"><code id="ft-kill">docker kill …</code><button data-copy="ft-kill">Copy</button></div>
               <div class="look">…or simply turn off that laptop's Wi-Fi.</div></li>
@@ -357,7 +364,7 @@
       <!-- 6. RECOVERY -->
       <div class="panel" data-panel="rc">
         <div>
-          <p class="idea">The coordinator writes every decision to a <b>durable log</b> before acting. If it crashes halfway through a transfer, on restart it reads the log and <b>finishes or undoes</b> the transfer, so money is never lost.</p>
+          <p class="idea">The coordinator writes every decision to a <b>durable, replicated log</b> before acting. If it crashes halfway through a transfer, the <b>newly elected coordinator</b> reads that log and <b>finishes or undoes</b> the transfer, so money is never lost.</p>
           <ol class="guide">
             <li>Choose where the coordinator should crash:
               <div class="radio" id="rc-fault">
@@ -368,9 +375,10 @@
             <li>Send ₹500 from A-1001 to B-1001 and crash.
               <div class="ctrl"><button class="btn danger" id="rc-go">Send &amp; crash coordinator</button></div>
               <div class="look">The coordinator turns red, and a transfer is stuck <b>“in doubt”</b> with its rows locked.</div></li>
-            <li>Restart the coordinator<span id="rc-where"></span>:
+            <li><b>Wait about 10 seconds.</b> A standby coordinator on another laptop wins the election, reads the shared log and resolves the transfer: <b>in doubt goes back to 0</b> and the total returns to <b>₹22,00,000</b>.
+              <div class="look">Only one coordinator running? Then nobody can take over: restart it yourself and it recovers on startup.</div></li>
+            <li>Restart the crashed coordinator<span id="rc-where"></span>. It rejoins as a <b>standby</b>:
               <div class="cmd"><code id="rc-start">docker start coordinator</code><button data-copy="rc-start">Copy</button></div></li>
-            <li>Watch it read its log and resolve the transfer: <b>in doubt goes back to 0</b> and the total returns to <b>₹22,00,000</b>.</li>
           </ol>
         </div>
         <div class="proof">
@@ -465,7 +473,10 @@ function renderBranch(b) {
 
 function render(s) {
   const cs = s.coordinator;
-  $("coord").innerHTML = `<span class="dot ${cs === "ok" ? "ok" : cs === "starting" ? "warn" : "bad"}"></span>Coordinator: ${cs === "ok" ? "running" : cs === "starting" ? "starting" : "DOWN"}`;
+  const lead = s.coordinators && s.coordinators.leader;
+  $("coord").innerHTML = `<span class="dot ${cs === "ok" ? "ok" : cs === "starting" || cs === "electing" ? "warn" : "bad"}"></span>Coordinator: ${
+    cs === "ok" ? (lead ? "leader " + esc(lead) : "running") : cs === "electing" ? "electing a new leader…" : cs === "starting" ? "starting" : "DOWN"}`;
+  renderCoordinators(s);
 
   $("total").textContent = money(s.total);
   $("expected").textContent = money(s.expected_total);
@@ -492,6 +503,18 @@ function render(s) {
   renderFailover(s);
   renderRecovery(s, doubt);
   detectEvents(s, doubt);
+}
+
+function renderCoordinators(s) {
+  const el = $("coordinators"), c = s.coordinators;
+  if (!c) { el.style.display = "none"; return; }
+  el.style.display = "";
+  const cards = c.members.length ? c.members.map(m => `<div class="coord ${m.leader ? "leader" : ""}">
+      <div><div class="name">${esc(m.name)}</div><div class="muted" style="font-size:12px">${esc(laptop(m.host))}</div></div>
+      <span class="badge ${m.leader ? "leader" : "standby"}">${m.leader ? "★ Leader" : "Standby"}</span></div>`).join("")
+    : `<div class="muted">No coordinator is running.</div>`;
+  el.innerHTML = `<div class="card-h"><h2>Coordinators</h2><span class="sub">run the two-phase commit · one leader elected through etcd, the rest stand by</span>
+    <span class="sub right">${c.leader ? "" : `<b style="color:var(--warn)">⏳ electing a new leader…</b>`}</span></div><div class="coords">${cards}</div>`;
 }
 
 /* ---------------- events + failover timing ---------------- */
@@ -524,9 +547,24 @@ function detectEvents(s, doubt) {
       }
     }
   }
+  if (s.coordinators) {
+    const f = fo.C || (fo.C = {});
+    const was = prev && prev.coordinators ? prev.coordinators.leader : undefined, cur = s.coordinators.leader;
+    if (prev && was && cur !== was && !f.downAt) { f.downAt = now; f.oldPrimary = was; f.newPrimary = null; f.took = null;
+      addEvent("bad", `Coordinator leader <b>${esc(was)}</b> is gone — election started`); }
+    if (prev && cur && cur !== was) {
+      const took = f.downAt ? Math.round((now - f.downAt) / 1000) : null;
+      addEvent("acc", `<b>${esc(cur)}</b> won the election and is the coordinator leader${took != null ? ` — took over in <b>${took} s</b> and ran recovery` : ""}`);
+      f.newPrimary = cur; f.took = took; f.downAt = null; f.doneAt = now;
+    }
+    if (prev && prev.coordinators) {
+      const before = new Set(prev.coordinators.members.map(m => m.name));
+      s.coordinators.members.filter(m => !before.has(m.name)).forEach(m => addEvent("ok", `Coordinator <b>${esc(m.name)}</b> joined as a standby`));
+    }
+  }
   if (prev) {
-    if (prev.coordinator === "ok" && s.coordinator !== "ok") addEvent("bad", `<b>Coordinator</b> is down`);
-    if (prev.coordinator !== "ok" && s.coordinator === "ok") addEvent("ok", `<b>Coordinator</b> is running again (it ran recovery from its log)`);
+    if (!s.coordinators && prev.coordinator === "ok" && s.coordinator !== "ok") addEvent("bad", `<b>Coordinator</b> is down`);
+    if (!s.coordinators && prev.coordinator !== "ok" && s.coordinator === "ok") addEvent("ok", `<b>Coordinator</b> is running again (it ran recovery from its log)`);
     if (prev._doubt === 0 && doubt > 0) addEvent("warn", `${doubt} transfer(s) <b>in doubt</b>: prepared, waiting for a decision`);
     if (prev._doubt > 0 && doubt === 0) addEvent("ok", `All in-doubt transfers <b>resolved</b>`);
     if ((prev.invariant === "unknown" || prev.invariant === "violation") && s.invariant === "ok") addEvent("ok", `Total is back to <b>${money(s.total)}</b>`);
@@ -651,7 +689,9 @@ function renderTxList(s) {
 /* ---------------- 4. fault tolerance ---------------- */
 const ftBranch = segment("ft-branch", () => S && renderFailover(S));
 function renderFailover(s) {
-  const k = ftBranch(), b = s.branches[k], f = fo[k] || {};
+  const k = ftBranch();
+  if (k === "C") return renderCoordFailover(s);
+  const b = s.branches[k], f = fo[k] || {};
   const prim = b.nodes.find(n => n.role === "primary");
   const target = prim ? prim.name : (f.oldPrimary || b.nodes[0].name);
   const host = (b.nodes.find(n => n.name === target) || {}).host;
@@ -678,6 +718,35 @@ function renderFailover(s) {
     const [cls, text] = ROLE[n.role] || ["other", n.role];
     return `<tr><td><b class="mono">${esc(n.name)}</b></td><td class="muted">${esc(laptop(n.host))}</td><td class="r"><span class="badge ${cls}">${esc(text)}</span></td></tr>`;
   }).join("");
+  $("ft-out").innerHTML = status + `<table class="t" style="margin-top:14px">${list}</table>`;
+}
+
+function renderCoordFailover(s) {
+  const c = s.coordinators, f = fo.C || {};
+  if (!c) {
+    $("ft-who").innerHTML = `Leader election is not enabled: there is a single coordinator.`;
+    $("ft-out").innerHTML = `<div class="muted">Start coordinators with <span class="mono">./multi/cluster.sh candidate up</span> on two or more laptops.</div>`;
+    return;
+  }
+  const lead = c.members.find(m => m.leader);
+  const target = lead || c.members.find(m => m.name === f.oldPrimary) || {};
+  $("ft-who").innerHTML = lead
+    ? `The coordinator leader is <b class="mono">${esc(lead.name)}</b> on <b>${esc(laptop(lead.host))}</b>. Kill it — on that laptop run:`
+    : `No coordinator leader right now — an election is in progress.`;
+  $("ft-kill").textContent = "docker kill coordinator";
+  $("ft-start").textContent = "docker start coordinator";
+  let status;
+  if (f.downAt) {
+    status = `<div class="big-status" style="color:var(--warn)">⏳ Electing a new coordinator… ${Math.round((Date.now() - f.downAt) / 1000)} s</div>
+      <div class="muted"><b class="mono">${esc(f.oldPrimary)}</b> stopped renewing its lease in etcd. When it expires (10 s), a standby takes the leader key and runs recovery.</div>`;
+  } else if (f.newPrimary && f.doneAt && Date.now() - f.doneAt < 5 * 60 * 1000 && f.oldPrimary) {
+    status = `<div class="big-status" style="color:var(--ok)">✓ New coordinator leader${f.took != null ? ` in ${f.took} s` : ""}</div>
+      <div class="muted"><b class="mono">${esc(f.newPrimary)}</b> took over from <b class="mono">${esc(f.oldPrimary)}</b> and finished any half-done transfers from the shared log.</div>`;
+  } else if (lead) {
+    status = `<div class="big-status" style="color:var(--ok)">✓ Healthy</div><div class="muted">${c.members.length - 1} standby coordinator(s) ready to take over.${c.members.length < 2 ? " <b style='color:var(--warn)'>Start a second one, or nobody can take over.</b>" : ""}</div>`;
+  } else status = `<div class="big-status" style="color:var(--warn)">⏳ Electing…</div>`;
+  const list = c.members.map(m => `<tr><td><b class="mono">${esc(m.name)}</b></td><td class="muted">${esc(laptop(m.host))}</td>
+    <td class="r"><span class="badge ${m.leader ? "leader" : "standby"}">${m.leader ? "★ Leader" : "Standby"}</span></td></tr>`).join("");
   $("ft-out").innerHTML = status + `<table class="t" style="margin-top:14px">${list}</table>`;
 }
 
@@ -738,10 +807,11 @@ $("rc-go").onclick = async () => {
   S && renderRecovery(S, S._doubt || 0);
 };
 function renderRecovery(s, doubt) {
-  $("rc-where").innerHTML = s.coordinator_host ? ` — on the coordinator laptop <b>${esc(s.coordinator_host)}</b>` : "";
-  const cs = s.coordinator;
-  let html = `<div class="big-status" style="color:${cs === "ok" ? "var(--ok)" : cs === "starting" ? "var(--warn)" : "var(--bad)"}">
-    Coordinator: ${cs === "ok" ? "✓ running" : cs === "starting" ? "starting…" : "✗ DOWN"}</div>`;
+  const crashedHost = fo.C && fo.C.oldPrimary && s.coordinators ? null : s.coordinator_host;
+  $("rc-where").innerHTML = fo.C && fo.C.oldPrimary ? ` (<b class="mono">${esc(fo.C.oldPrimary)}</b>), on its own laptop` : crashedHost ? ` — on laptop <b>${esc(crashedHost)}</b>` : "";
+  const cs = s.coordinator, lead = s.coordinators && s.coordinators.leader;
+  let html = `<div class="big-status" style="color:${cs === "ok" ? "var(--ok)" : cs === "starting" || cs === "electing" ? "var(--warn)" : "var(--bad)"}">
+    Coordinator: ${cs === "ok" ? "✓ " + (lead ? esc(lead) + " leads" : "running") : cs === "electing" ? "⏳ electing a new leader…" : cs === "starting" ? "starting…" : "✗ DOWN"}</div>`;
   const prep = Object.entries(s.branches).flatMap(([k, b]) => (b.prepared || []).map(p => ({ k, ...p })));
   if (prep.length) html += `<div class="indoubt"><b style="color:var(--warn)">${prep.length} prepared transaction(s) waiting for a decision</b> — their rows are locked:<br>` +
     prep.map(p => `Branch ${esc(p.k)}: <span class="mono">${esc(p.gid)}</span>`).join("<br>") + `</div>`;

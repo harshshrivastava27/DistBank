@@ -72,6 +72,16 @@ def init_branch(branch: str) -> None:
 
 
 def init_coord() -> None:
+    if config.COORD_LOG_BRANCH:
+        # The log lives in its own database inside a replicated branch cluster.
+        # The bank role must exist first (init_branch creates it), then the database.
+        init_branch(config.COORD_LOG_BRANCH)
+        with db.connect_branch(config.COORD_LOG_BRANCH, "write", user=config.PG_SUPERUSER,
+                               password=config.PG_SUPERUSER_PASSWORD, dbname="postgres") as conn:
+            if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s",
+                                (config.COORD_LOG_DB,)).fetchone():
+                conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                    sql.Identifier(config.COORD_LOG_DB), sql.Identifier(config.BANK_USER)))
     with db.connect_coord() as conn:
         conn.execute(COORD_SCHEMA)
 

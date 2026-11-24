@@ -9,6 +9,18 @@ COORDINATOR_URL = os.getenv("COORDINATOR_URL", "http://coordinator:8000")
 # laptop's HAProxy from outside (it publishes 5000-5003 as 5500-5503).
 HAPROXY_PORT_OFFSET = int(os.getenv("HAPROXY_PORT_OFFSET", "0"))
 
+# Coordinator leader election (multi-laptop). Unset = a single coordinator that
+# is always the leader (the original setup).
+ELECTION_ETCD = os.getenv("ELECTION_ETCD")                       # e.g. http://10.60.1.152:2379
+COORDINATOR_NAME = os.getenv("COORDINATOR_NAME", "coordinator")
+COORDINATOR_ADVERTISE_URL = os.getenv("COORDINATOR_ADVERTISE_URL", COORDINATOR_URL)
+
+# Where the coordinator's durable log lives. Unset = the standalone coord-db.
+# "A" = a database inside Branch A's replicated cluster, so it survives the loss
+# of any one laptop and every coordinator candidate can read it.
+COORD_LOG_BRANCH = os.getenv("COORD_LOG_BRANCH")
+COORD_LOG_DB = os.getenv("COORD_LOG_DB", "coordlog")
+
 # The bank is sharded by branch. The first letter of an account id ("A-1001")
 # is the shard key: it says which database cluster holds that account.
 BRANCHES = {

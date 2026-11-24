@@ -19,7 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import config, db
+from . import config, db, leader
 
 app = FastAPI(title="Distributed Bank: dashboard")
 pool = ThreadPoolExecutor(max_workers=24)
@@ -108,7 +108,7 @@ def coord_view():
 
 
 def coord_view_api():
-    rows = httpx.get(f"{config.COORDINATOR_URL}/transactions", params={"limit": 200}, timeout=1.5).json()
+    rows = httpx.get(f"{coordinator_url()}/transactions", params={"limit": 200}, timeout=1.5).json()
     counts = {}
     for r in rows:
         counts[r["state"]] = counts.get(r["state"], 0) + 1
@@ -144,9 +144,32 @@ def haproxy_view():
     return out
 
 
+def coordinator_url() -> str:
+    """Where to send transfers: the elected leader, if elections are on."""
+    if config.ELECTION_ETCD:
+        cur = safe(leader.get_leader, config.ELECTION_ETCD)
+        if cur:
+            return cur["url"]
+    return config.COORDINATOR_URL
+
+
+def coordinators_view():
+    """Every coordinator candidate and who leads (None if elections are off)."""
+    if not config.ELECTION_ETCD:
+        return None
+    cur = leader.get_leader(config.ELECTION_ETCD)
+    members = leader.get_members(config.ELECTION_ETCD)
+    for m in members:
+        m["host"] = urlparse(m["url"]).hostname
+        m["leader"] = bool(cur) and cur["name"] == m["name"]
+    return {"leader": cur["name"] if cur else None, "members": members}
+
+
 def coordinator_status() -> str:
     try:
-        return httpx.get(f"{config.COORDINATOR_URL}/health", timeout=0.8).json().get("status", "down")
+        if config.ELECTION_ETCD and not safe(leader.get_leader, config.ELECTION_ETCD):
+            return "electing"                   # nobody holds the leader key right now
+        return httpx.get(f"{coordinator_url()}/health", timeout=0.8).json().get("status", "down")
     except Exception:
         return "down"
 
@@ -204,7 +227,8 @@ def api_state():
     totals = [b["total"] for b in state["branches"].values()]
     state["total"] = str(sum(Decimal(t) for t in totals)) if all(totals) else None
     state["invariant"] = verdict
-    host = urlparse(config.COORDINATOR_URL).hostname
+    state["coordinators"] = safe(coordinators_view)
+    host = urlparse(coordinator_url()).hostname
     state["coordinator_host"] = None if host == "coordinator" else host
     return state
 
@@ -256,11 +280,11 @@ def api_loadtest(req: LoadTest):
         except Exception:
             pass
     writes_ok = 0
-    for _ in range(max(0, min(req.writes, 20))):          # ₹1 vault -> customer: total unchanged
+    for _ in range(max(0, min(req.writes, 20))):          # touches a timestamp only: no money moves
         try:
-            r = httpx.post(f"{config.COORDINATOR_URL}/deposit",
-                           json={"account": f"{b}-1010", "amount": "1"}, timeout=10)
-            writes_ok += r.status_code == 200
+            with db.connect_branch(b, "write") as c:
+                c.execute("UPDATE accounts SET updated_at = now() WHERE id = %s", (config.vault_of(b),))
+            writes_ok += 1
         except Exception:
             pass
     after = safe(haproxy_view, default={})
@@ -278,7 +302,7 @@ def api_loadtest(req: LoadTest):
 def api_account(account_id: str):
     """Availability demo: a customer's balance read, through the coordinator API."""
     try:
-        r = httpx.get(f"{config.COORDINATOR_URL}/accounts/{account_id}", timeout=5)
+        r = httpx.get(f"{coordinator_url()}/accounts/{account_id}", timeout=5)
         return JSONResponse(r.json(), status_code=r.status_code)
     except Exception as e:
         return JSONResponse({"detail": f"coordinator unreachable ({type(e).__name__})"}, status_code=502)
@@ -288,7 +312,7 @@ async def forward(path: str, request: Request):
     body = await request.body()
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(f"{config.COORDINATOR_URL}{path}", content=body,
+            r = await client.post(f"{coordinator_url()}{path}", content=body,
                                   headers={"content-type": "application/json"})
         return JSONResponse(r.json(), status_code=r.status_code)
     except Exception as e:

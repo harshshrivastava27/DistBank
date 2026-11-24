@@ -11,6 +11,9 @@
 #   ./multi/cluster.sh load [seconds]           traffic generator (coordinator laptop)
 #   ./multi/cluster.sh kill <node>              hard-kill a node running on THIS laptop
 #   ./multi/cluster.sh start <node>             start it again
+#   ./multi/cluster.sh candidate up|down        coordinator candidate (HAProxy + coordinator + dashboard)
+#                                               on 2+ laptops: they elect one leader through etcd
+#   ./multi/cluster.sh leader                   which coordinator leads, and the standbys
 set -eu
 cd "$(dirname "$0")" || exit 1
 ENV=cluster.env
@@ -36,6 +39,18 @@ tcp() {  # tcp <host> <port>  -> 0 if something answers
 }
 dc_coord() { docker compose --env-file "$ENV" -f docker-compose.coord.yml "$@"; }
 dc_nodes() { docker compose --env-file "$ENV" -f docker-compose.nodes.yml "$@"; }
+dc_cand()  { docker compose --env-file "$ENV" -f docker-compose.candidate.yml "$@"; }
+this_ip() {  # this laptop's Wi-Fi address (override with THIS_IP=... in the environment)
+  [ -n "${THIS_IP:-}" ] && { echo "$THIS_IP"; return; }
+  ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'
+}
+etcd_get() {  # etcd_get <key-or-prefix> [prefix]  -> JSON values, one per line
+  k=$(printf '%s' "$1" | base64)
+  if [ -n "${2:-}" ]; then e=$(printf '%s' "${1%?}$(printf '%s' "${1: -1}" | tr '/' '0')" | base64); body="{\"key\":\"$k\",\"range_end\":\"$e\"}"
+  else body="{\"key\":\"$k\"}"; fi
+  curl -s -m 3 -X POST "http://$COORD_IP:2379/v3/kv/range" -d "$body" \
+    | grep -o '"value":"[^"]*"' | cut -d'"' -f4 | while read -r v; do printf '%s' "$v" | base64 -d; echo; done
+}
 
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
 case "$cmd" in
@@ -109,6 +124,23 @@ case "$cmd" in
   load)
     if [ -n "${1:-}" ]; then dc_coord --profile tools run --rm loadgen python -m bank.loadgen --seconds "$1"
     else dc_coord --profile tools run --rm loadgen; fi ;;
+
+  candidate)
+    THIS_IP=$(this_ip); export THIS_IP
+    [ -n "$THIS_IP" ] || { echo "could not find this laptop's IP; run with THIS_IP=x.x.x.x" >&2; exit 1; }
+    case "${1:-up}" in
+      up)
+        tcp "$COORD_IP" 2379 || { echo "etcd at $COORD_IP:2379 not reachable" >&2; exit 1; }
+        dc_cand up -d --build
+        echo "Coordinator candidate coord-$THIS_IP started. Dashboard: http://$THIS_IP:8080"
+        echo "Who leads:  ./multi/cluster.sh leader" ;;
+      down) dc_cand down ;;
+      *) echo "candidate up|down" >&2; exit 1 ;;
+    esac ;;
+
+  leader)
+    echo "Leader:";   etcd_get /distbank/coordinator/leader | sed 's/^/  /'
+    echo "Alive:";    etcd_get /distbank/coordinator/members/ prefix | sed 's/^/  /' ;;
 
   kill)  docker kill "${1:?which node}" ;;
   start) docker start "${1:?which node}" ;;

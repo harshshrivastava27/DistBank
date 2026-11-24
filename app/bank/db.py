@@ -56,4 +56,7 @@ def connect_read(branch: str) -> psycopg.Connection:
 
 
 def connect_coord() -> psycopg.Connection:
+    """The coordinator's durable log."""
+    if config.COORD_LOG_BRANCH:          # replicated: lives in a branch cluster, follows its failovers
+        return connect_branch(config.COORD_LOG_BRANCH, "write", dbname=config.COORD_LOG_DB)
     return psycopg.connect(config.COORD_DB_DSN, autocommit=True)

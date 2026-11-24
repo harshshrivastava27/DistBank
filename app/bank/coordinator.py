@@ -33,14 +33,29 @@ from fastapi.responses import JSONResponse
 from psycopg import sql
 from pydantic import BaseModel, Field
 
-from . import config, db, schema
+from . import config, db, leader, schema
 
-ready = threading.Event()
+ready = threading.Event()          # set only while this coordinator is the leader and has recovered
 recovery_lock = threading.Lock()
 
 
 def log(msg: str) -> None:
     print(time.strftime("%H:%M:%S"), msg, flush=True)
+
+
+# Leader election (see leader.py). Without ELECTION_ETCD there is a single
+# coordinator, which is always the leader.
+election = (leader.Election(config.ELECTION_ETCD, config.COORDINATOR_NAME,
+                            config.COORDINATOR_ADVERTISE_URL, log=log)
+            if config.ELECTION_ETCD else None)
+
+
+def is_leader() -> bool:
+    return election.is_leader() if election else True
+
+
+class NotLeader(Exception):
+    pass
 
 
 # --------------------------------------------------------------------------
@@ -68,6 +83,19 @@ def log_insert(txn_id, kind, src, dst, amount, participants, state, note=None):
             "INSERT INTO txn_log (txn_id, kind, from_account, to_account, amount, participants, state, note) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (txn_id, kind, src, dst, amount, participants, state, note))
+
+
+def log_decide(txn_id, state) -> bool:
+    """Record the COMMIT/ABORT decision, but only if nobody decided yet.
+
+    This compare-and-set on the replicated log is the fencing rule between
+    coordinators: if a newly elected leader already presumed this transfer
+    aborted (state no longer STARTED), the old leader's COMMIT is refused."""
+    with db.connect_coord() as c:
+        cur = c.execute(
+            "UPDATE txn_log SET state = %s, updated_at = now() WHERE txn_id = %s AND state = 'STARTED'",
+            (state, txn_id))
+        return cur.rowcount == 1
 
 
 def log_state(txn_id, state, note=None):
@@ -229,7 +257,12 @@ def do_transfer(src: str, dst: str, amount: Decimal, fault: Optional[str] = None
         crash("both branches PREPARED, but no decision logged yet")
 
     # Decision: this write is the commit point of the whole distributed transaction.
-    log_state(txn_id, "COMMITTING")
+    # Only the leader may decide, and only if no other coordinator decided first.
+    if not is_leader() or not log_decide(txn_id, "COMMITTING"):
+        step("decision refused: this coordinator is no longer the leader; "
+             "the new leader decides (presumed abort)")
+        raise HTTPException(503, {"txn_id": txn_id, "error": "coordinator lost leadership mid-transfer; "
+                                  "the new leader rolls it back", "steps": steps})
     step("coordinator log: decision = COMMIT (durable)")
 
     if fault == "crash_after_decision":
@@ -327,25 +360,44 @@ def sweep_orphans() -> None:
                 log(f"[recovery] orphan {gid} on branch {branch}: log says {row[0]} -> {action} PREPARED")
 
 
-def background() -> None:
-    late = schema.init_all(log=log)          # branches that were down while we started
-    log("[startup] running crash recovery")
+def take_over() -> None:
+    """Just became leader: whatever the previous leader left half-done is resolved
+    from the log before we accept new transfers."""
+    log("[startup] running crash recovery" if not election else
+        f"[election] {config.COORDINATOR_NAME} is the new leader: running crash recovery from the log")
     try:
         report = recover(startup=True)
         done = sum(1 for r in report if r["now"] != r["was"])
         waiting = len(report) - done
-        log(f"[startup] recovery finished: {done} transaction(s) resolved"
+        log(f"[recovery] finished: {done} transaction(s) resolved"
             + (f", {waiting} waiting for an unreachable branch (will retry)" if waiting else "")
-            if report else "[startup] recovery finished, nothing in doubt")
+            if report else "[recovery] finished, nothing in doubt")
     except Exception as e:
-        log(f"[startup] recovery deferred: {type(e).__name__}: {e}")
+        log(f"[recovery] deferred: {type(e).__name__}: {e}")
     ready.set()
-    log("[startup] coordinator ready")
+    log("[startup] coordinator ready" if not election else
+        f"[election] {config.COORDINATOR_NAME} is serving transfers")
+
+
+def background() -> None:
+    late = schema.init_all(log=log)          # branches that were down while we started
+    if election:
+        threading.Thread(target=election.run, daemon=True).start()
+    was_leader = False
     tick = 0
-    while True:                 # keep retrying whatever could not be finished yet
-        time.sleep(2)
+    while True:
+        leading = is_leader()
+        if leading and not was_leader:
+            take_over()
+        elif was_leader and not leading:
+            ready.clear()
+            log(f"[election] {config.COORDINATOR_NAME} lost leadership: standing by, not accepting transfers")
+        was_leader = leading
+        time.sleep(2 if leading else 1)
+        if not leading:
+            continue
         tick += 1
-        try:
+        try:   # leader only: keep retrying whatever could not be finished yet
             recover()
             if tick % 5 == 0:
                 sweep_orphans()
@@ -385,6 +437,15 @@ class CashRequest(BaseModel):
 
 
 def require_ready():
+    if election and not is_leader():
+        ready.clear()
+        cur = None
+        try:
+            cur = leader.get_leader(config.ELECTION_ETCD)
+        except Exception:
+            pass
+        raise HTTPException(503, f"this coordinator ({config.COORDINATOR_NAME}) is a standby; "
+                                 + (f"the leader is {cur['name']} at {cur['url']}" if cur else "an election is in progress"))
     if not ready.is_set():
         raise HTTPException(503, "coordinator is still starting (waiting for the database clusters)")
 
@@ -403,7 +464,9 @@ def run(fn, *args):
 
 @app.get("/health")
 def health():
-    return {"status": "ok" if ready.is_set() else "starting"}
+    if election and not is_leader():
+        return {"status": "standby", "name": config.COORDINATOR_NAME}
+    return {"status": "ok" if ready.is_set() else "starting", "name": config.COORDINATOR_NAME}
 
 
 @app.post("/transfer")

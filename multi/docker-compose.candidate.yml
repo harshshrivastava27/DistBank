@@ -1,0 +1,62 @@
+# A coordinator CANDIDATE: run this on 2 or more laptops.
+#   ./multi/cluster.sh candidate up
+#
+# Each laptop gets its own HAProxy, coordinator and dashboard. The coordinators
+# hold an election in etcd (see app/bank/leader.py): one leads and accepts
+# transfers, the others stand by. If the leader dies, a standby takes over in
+# about 10 s and finishes any half-done transfer from the shared log.
+#
+# The coordinator's log is the "coordlog" database inside Branch A's replicated
+# cluster, so every candidate reads the same log and it survives any one laptop.
+# THIS_IP (this laptop's address) is filled in by cluster.sh.
+name: distbank-candidate
+
+x-env: &env
+  PYTHONUNBUFFERED: "1"
+  HAPROXY_HOST: haproxy
+  ELECTION_ETCD: http://${COORD_IP}:2379
+  COORD_LOG_BRANCH: A
+  COORDINATOR_NAME: coord-${THIS_IP}
+  COORDINATOR_ADVERTISE_URL: http://${THIS_IP}:8000
+  PG_A1_IP: ${PG_A1_IP}
+  PG_A2_IP: ${PG_A2_IP}
+  PG_A3_IP: ${PG_A3_IP}
+  PG_B1_IP: ${PG_B1_IP}
+  PG_B2_IP: ${PG_B2_IP}
+  PG_B3_IP: ${PG_B3_IP}
+
+services:
+  haproxy:
+    image: haproxy:2.8
+    container_name: cand-haproxy
+    environment:
+      PG_A1_IP: ${PG_A1_IP}
+      PG_A2_IP: ${PG_A2_IP}
+      PG_A3_IP: ${PG_A3_IP}
+      PG_B1_IP: ${PG_B1_IP}
+      PG_B2_IP: ${PG_B2_IP}
+      PG_B3_IP: ${PG_B3_IP}
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8404:7000"        # this laptop's HAProxy statistics page
+
+  coordinator:
+    build: ../app
+    image: distbank-app
+    container_name: coordinator
+    command: ["uvicorn", "bank.coordinator:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *env
+    ports:
+      - "8000:8000"
+    depends_on: [haproxy]
+    restart: "no"          # a crashed coordinator stays down until you start it (for the demo)
+
+  dashboard:
+    image: distbank-app
+    container_name: dashboard
+    command: ["uvicorn", "bank.dashboard:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment: *env
+    ports:
+      - "8080:8080"
+    depends_on: [haproxy, coordinator]
