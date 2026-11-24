@@ -79,9 +79,13 @@ Check:
 
    If it is different, **STOP**: every laptop's `cluster.env` must be
    updated first. Tell your human.
-3. **You can reach the others:** `./cluster.sh check-etcd` must at least
-   print one line per laptop (it is fine that they say "not reachable" before
-   step 2).
+3. **You can reach the others:** `./cluster.sh check-etcd` must print **one
+   line per laptop** (three lines) and then a summary. Before step 2 it is
+   normal and expected that only Christy's line is healthy (the old etcd),
+   that the others say "not reachable" or "port open but no answer", and
+   that it ends with "1 of 3 members healthy" and exit code 1. That still
+   counts as passed. It only fails if it prints fewer than three laptop
+   lines, which means your copy is older than commit 4ad5e8e: `git pull`.
 4. **Firewall (Linux only):** if `ufw` is active, allow the ports:
    ```bash
    sudo ufw allow 2379:2380/tcp; sudo ufw allow 5411:5423/tcp; sudo ufw allow 8011:8023/tcp
@@ -167,6 +171,16 @@ must appear under "Alive". Tell your human: **"Step 5 done on Christy."**
 ### Step 2
 
 **WAIT** for "Step 1 done: old containers removed on Christy".
+
+First check that nothing old on this laptop holds etcd's ports:
+
+```bash
+docker ps -a --format '{{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '2379|2380'
+```
+
+If that prints any container other than `etcd-member`, **STOP** and show the
+line to your human (Harsh decides whether it can be removed). If it prints
+nothing, continue:
 
 ```bash
 cd ~/DistBank/multi

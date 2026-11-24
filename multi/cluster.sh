@@ -84,14 +84,15 @@ case "$cmd" in
       n=$((n+1))
       printf '  %-16s ' "$ip"
       if tcp "$ip" 2379; then
-        h=$(curl -s -m 3 "http://$ip:2379/health"); echo "$h" | grep -q '"true"' && up=$((up+1))
-        echo "$h"
+        h=$(curl -s -m 3 "http://$ip:2379/health" || true)     # never abort the whole check
+        if [ -z "$h" ]; then echo "port open but no answer (starting, or waiting for the other members)"
+        else echo "$h" | grep -q '"true"' && up=$((up+1)); echo "$h"; fi
       else echo "not reachable"; fi
     done
     q=$((n/2+1))
     echo "  $up of $n members healthy (needs $q for elections to work)"
-    ip=$(etcd_any) && curl -s -m 3 -X POST "http://$ip:2379/v3/cluster/member/list" -d '{}' \
-      | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ' | sed 's/^/  members: /'; echo
+    ip=$(etcd_any) && { curl -s -m 3 -X POST "http://$ip:2379/v3/cluster/member/list" -d '{}' || true; } \
+      | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ' | sed 's/^/  members: /' || true; echo
     [ "$up" -ge "$q" ]
     ;;
 
