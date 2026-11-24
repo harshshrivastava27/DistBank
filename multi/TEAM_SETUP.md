@@ -26,9 +26,14 @@ stopped. After this switch:
 
 Where the data comes from: Harsh's pg-a2 and pg-b2 are the **synchronous**
 replicas of both branches, so they hold every committed transaction. They are
-switched first and become the primaries; the new nodes on Christy's and
-Yash's laptops start empty and copy everything from them. Christy's old data
-volumes are **kept** (not deleted) as a backup.
+switched first and become the primaries. The nodes on Christy's and Yash's
+laptops then follow them: a node with **no** data volume yet starts empty and
+copies everything; a node whose old volume is still there (Christy's old
+setup used the same project name, so pg-a3/pg-b3 reuse theirs) is
+**rewound** with `pg_rewind` to the primaries' history and catches up.
+Either way nothing committed is lost: Harsh's nodes were the synchronous
+replicas, so they hold every committed transaction, and a rewind only
+discards writes that were never committed. Volumes are never deleted.
 
 ## Rules for the agent
 
@@ -110,8 +115,7 @@ List the old containers:
 docker ps -a --format '{{.Names}}\t{{.Status}}'
 ```
 
-Remove the old setup's containers. **Containers only, not volumes**: the old
-data stays on disk as a backup.
+Remove the old setup's containers. **Containers only, not volumes.**
 
 ```bash
 docker rm -f etcd coordinator dashboard haproxy coord-db pg-a3 pg-b3 loadgen 2>/dev/null
@@ -148,9 +152,11 @@ Tell your human: **"Step 2 done on Christy: etcd 3 of 3 healthy."**
 ./cluster.sh status
 ```
 
-Repeat `./cluster.sh status` every ~15 s. pg-a3 and pg-b3 go through
-"creating replica" / "starting" and must end as **replica running**
-(copying the data can take a minute).
+Repeat `./cluster.sh status` every ~15 s. pg-a3 and pg-b3 reuse their old
+volumes, so Patroni rewinds them (`pg_rewind`) to the new primaries' history;
+they go through "starting" and must end as **replica running** (about a
+minute). If one stays in "start failed" or "stopped" for more than 3 minutes,
+stop and show your human `docker logs --tail 40 pg-a3` (Harsh decides).
 
 Tell your human: **"Step 4 done on Christy: pg-a3, pg-b3 are replicas."**
 
@@ -305,4 +311,5 @@ docker logs --tail 40 <the container that failed>
 ```
 
 Do not delete anything to "start over": Harsh's laptop holds the
-authoritative data, and Christy's old volumes are the backup.
+authoritative data, and the old transaction log and etcd volumes on
+Christy's laptop are kept as a backup.
