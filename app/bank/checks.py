@@ -31,7 +31,7 @@ def need(cond, msg):
 
 
 def state():
-    return http.get(f"{DASH}/api/state").json()
+    return http.get(f"{DASH}/api/state", params={"fresh": "true"}).json()   # bypass the 0.5 s cache
 
 
 def wait_for(what, fn, timeout=60, every=0.5):
@@ -391,6 +391,69 @@ def check_balance(account):
 def check_coordinator(expect):
     wait_for(f"coordinator {expect}", lambda: state()["coordinator"] == expect, 60)
     print(f"  coordinator: {expect}")
+
+
+def check_idempotency():
+    """A retried request with the same Idempotency-Key runs once, local and 2PC."""
+    import uuid
+    for src, dst in (("A-1007", "A-1008"), ("A-1007", "B-1007")):
+        key = "test-" + uuid.uuid4().hex
+        before = (balance(src), balance(dst))
+        body = {"from_account": src, "to_account": dst, "amount": "25"}
+        first = http.post(f"{API}/transfer", json=body, headers={"Idempotency-Key": key})
+        need(first.status_code == 200, f"first attempt failed: {first.text}")
+        again = http.post(f"{API}/transfer", json=body, headers={"Idempotency-Key": key})
+        need(again.status_code == 200 and again.json().get("replayed"), f"retry was not a replay: {again.text}")
+        need(again.json()["txn_id"] == first.json()["txn_id"], "retry returned a different transaction")
+        after = (balance(src), balance(dst))
+        need(after == (before[0] - 25, before[1] + 25), f"money moved {before} -> {after}, expected exactly once")
+        other = http.post(f"{API}/transfer", json={**body, "amount": "26"}, headers={"Idempotency-Key": key})
+        need(other.status_code == 422, f"same key, different request should be 422, got {other.status_code}")
+        print(f"  {first.json()['kind']}: sent twice with one key -> executed once (txn {first.json()['txn_id']}); "
+              f"same key with another amount -> 422")
+        transfer(dst, src, "25")
+
+
+def check_idempotency_local(branch="A"):
+    """A local transfer with an Idempotency-Key runs once, even with the log database down."""
+    import uuid
+    src, dst, key = f"{branch}-1009", f"{branch}-1010", "test-" + uuid.uuid4().hex
+    before = (balance(src), balance(dst))
+    body = {"from_account": src, "to_account": dst, "amount": "7"}
+    codes = [http.post(f"{API}/transfer", json=body, headers={"Idempotency-Key": key}) for _ in range(2)]
+    need(all(r.status_code == 200 for r in codes), f"keyed local transfer failed: {[r.text for r in codes]}")
+    need(codes[1].json().get("replayed"), "second attempt was executed again")
+    need((balance(src), balance(dst)) == (before[0] - 7, before[1] + 7), "money moved more than once")
+    print(f"  branch {branch}: keyed local transfer sent twice -> executed once (retry-safe by the branch alone)")
+    transfer(dst, src, "7")
+
+
+def check_causal_read():
+    """Read-your-writes: a read with the write's min_lsn always sees the write."""
+    acct = "B-1008"
+    for i in range(10):
+        r = http.post(f"{API}/deposit", json={"account": acct, "amount": "1"})
+        need(r.status_code == 200, f"deposit failed: {r.text}")
+        lsn = r.json()["lsn"]["B"]
+        want = balance(acct)
+        got = http.get(f"{API}/accounts/{acct}", params={"min_lsn": lsn}).json()
+        need(Decimal(str(got["balance"])) == want, f"read with min_lsn={lsn} returned {got['balance']}, expected {want}")
+    print(f"  10 deposits, each read back with its commit LSN: always saw the write "
+          f"(last read served by {got['served_by']})")
+    need(http.get(f"{API}/accounts/{acct}", params={"min_lsn": "nonsense"}).status_code == 400, "bad min_lsn accepted")
+    need(http.post(f"{API}/withdraw", json={"account": acct, "amount": "10"}).status_code == 200, "withdraw failed")
+    need(http.post(f"{API}/deposit", json={"account": "Z-1001", "amount": "1"}).status_code == 404,
+         "unknown branch should be 404")
+
+
+def check_reconcile():
+    """Double-entry audit: balances match the ledger; every transfer nets to zero."""
+    r = http.get(f"{API}/audit/reconcile")
+    need(r.status_code == 200, f"audit failed: {r.text[:200]}")
+    d = r.json()
+    need(d["ok"], f"ledger mismatches: {d['mismatches'][:5]}")
+    print(f"  {d['checked_accounts']} accounts match opening balance + ledger; "
+          f"{d['checked_ledger_txns']} transactions net to zero; {d['checked_2pc_txns']} committed 2PC transfers verified")
 
 
 CHECKS = {name[len("check_"):].replace("_", "-"): fn for name, fn in globals().items() if name.startswith("check_")}

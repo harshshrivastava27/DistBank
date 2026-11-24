@@ -7,6 +7,7 @@ transaction history from the coordinator's log.
 """
 import csv
 import io
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
@@ -15,7 +16,7 @@ from urllib.parse import urlparse
 
 import httpx
 import psycopg
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -108,7 +109,9 @@ def coord_view():
 
 
 def coord_view_api():
-    rows = httpx.get(f"{coordinator_url()}/transactions", params={"limit": 200}, timeout=1.5).json()
+    r = httpx.get(f"{coordinator_url()}/transactions", params={"limit": 200}, timeout=1.5)
+    r.raise_for_status()                  # a 503 {"detail": ...} is not a list of rows
+    rows = r.json()
     counts = {}
     for r in rows:
         counts[r["state"]] = counts.get(r["state"], 0) + 1
@@ -216,8 +219,24 @@ def judge(state: dict) -> str:
     return "settling" if (in_doubt or busy) else "violation"
 
 
+_state_cache = {"at": 0.0, "value": None}
+_state_lock = threading.Lock()
+
+
 @app.get("/api/state")
-def api_state():
+def api_state(fresh: bool = False):
+    """Every open browser polls this each second. Requests within 0.5 s share one
+    result, so 3 laptops x N tabs don't multiply database connections (or inflate
+    the HAProxy counters shown in the load-balancing demo)."""
+    with _state_lock:
+        if not fresh and _state_cache["value"] is not None and time.monotonic() - _state_cache["at"] < 0.5:
+            return _state_cache["value"]
+        value = build_state()
+        _state_cache.update(at=time.monotonic(), value=value)
+        return value
+
+
+def build_state():
     state = collect()
     verdict = judge(state)
     if verdict == "violation":                 # the two sums are read at slightly different
@@ -239,7 +258,10 @@ def api_state():
 def api_replication(account: str = "A-1001"):
     """Replication demo: read one account directly from EVERY node of its branch."""
     account = account.upper()
-    branch = config.branch_of(account)
+    try:
+        branch = config.branch_of(account)
+    except ValueError:
+        raise HTTPException(404, f"unknown account {account}")
 
     def read_node(node):
         host, pg_port, _ = config.node_endpoint(node)
@@ -270,6 +292,8 @@ def api_loadtest(req: LoadTest):
     """Load-balancing demo: send reads and writes through HAProxy, then report
     how many connections each node received (from HAProxy's own counters)."""
     b = req.branch.upper()
+    if b not in config.BRANCHES:
+        raise HTTPException(400, f"unknown branch {req.branch!r}; use one of {', '.join(config.BRANCHES)}")
     cfg = config.BRANCHES[b]
     before = safe(haproxy_view, default={})
     reads_ok = 0
@@ -335,6 +359,16 @@ async def api_recover(request: Request):
 @app.post("/api/deposit")
 async def api_deposit(request: Request):
     return await forward("/deposit", request)
+
+
+@app.get("/api/reconcile")
+def api_reconcile():
+    """Double-entry ledger audit, run by the current coordinator leader."""
+    try:
+        r = httpx.get(f"{coordinator_url()}/audit/reconcile", timeout=30)
+        return JSONResponse(r.json(), status_code=r.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": f"coordinator unreachable ({type(e).__name__})"}, status_code=502)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -79,7 +79,7 @@ case "$cmd" in
     docker compose up -d --build
     echo "Waiting for both clusters to elect a primary and for the coordinator to start..."
     i=0
-    until [ "$(curl -s $API/health 2>/dev/null)" = '{"status":"ok"}' ]; do
+    until curl -s $API/health 2>/dev/null | grep -q '"status":"ok"'; do
       i=$((i + 1))
       if [ $i -gt 90 ]; then echo "Still not ready after 3 minutes. Check: docker compose logs coordinator"; exit 1; fi
       sleep 2
@@ -170,7 +170,7 @@ case "$cmd" in
     docker start coordinator >/dev/null
     echo "Coordinator started. Waiting for its recovery pass..."
     i=0
-    until [ "$(curl -s $API/health 2>/dev/null)" = '{"status":"ok"}' ]; do
+    until curl -s $API/health 2>/dev/null | grep -q '"status":"ok"'; do
       i=$((i + 1)); [ $i -gt 30 ] && break; sleep 1
     done
     docker compose logs --tail 12 coordinator | grep -E "recovery|startup|fault" || true

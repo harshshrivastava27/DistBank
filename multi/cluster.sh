@@ -59,7 +59,13 @@ etcd_any() {  # first etcd member that answers
 }
 this_ip() {  # this laptop's Wi-Fi address (override with THIS_IP=... in the environment)
   [ -n "${THIS_IP:-}" ] && { echo "$THIS_IP"; return; }
-  ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'
+  ipconfig getifaddr en0 2>/dev/null && return                                  # macOS Wi-Fi
+  ipconfig getifaddr en1 2>/dev/null && return
+  ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | grep . && return   # Linux: the address used to go out
+  hostname -I 2>/dev/null | awk '{print $1}' | grep . && return
+  # Windows (Git Bash): ask PowerShell for the address of the default route
+  powershell.exe -NoProfile -Command "(Get-NetIPConfiguration | Where-Object { \$_.IPv4DefaultGateway }).IPv4Address.IPAddress" 2>/dev/null \
+    | tr -d '\r' | head -1
 }
 etcd_get() {  # etcd_get <key-or-prefix> [prefix]  -> JSON values, one per line
   k=$(printf '%s' "$1" | base64)

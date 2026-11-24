@@ -309,11 +309,14 @@
             <li>Send it.
               <div class="ctrl"><button class="btn" id="tx-go">Send transfer</button></div></li>
             <li>Walk through the steps on the right: <b>Phase 1</b> PREPARE on both branches → <b>decision</b> logged → <b>Phase 2</b> COMMIT on both. The total at the top is unchanged.</li>
+            <li>Prove the books balance: every account equals its opening balance plus its ledger entries, and every transfer's debit and credit cancel out.
+              <div class="ctrl"><button class="btn ghost" id="audit-go">Audit the ledger</button></div></li>
           </ol>
         </div>
         <div class="proof">
           <h3>What the coordinator did</h3>
           <div id="tx-out" class="muted">The protocol steps appear here.</div>
+          <div id="audit-out"></div>
           <h3 style="margin-top:18px">Recent transfers</h3>
           <div id="tx-list" class="muted">—</div>
         </div>
@@ -466,7 +469,8 @@ function renderBranch(b) {
       <div class="name">${esc(n.name)}</div>
       <div class="host">${n.host ? (owner(n.host) ? `on <b>${esc(owner(n.host))}</b> · ${esc(n.host)}` : "on " + esc(n.host)) : ""}</div>
       <div class="role"><span class="badge ${cls}">${esc(text)}</span></div>
-      <div class="meta">${esc(meta)}</div></div>`;
+      <div class="meta">${esc(meta)}</div>${n.role === "down" || (n.writes == null && n.reads == null) ? ""
+        : `<div class="meta num" title="connections HAProxy sent to this node">↑ ${n.writes ?? 0} writes · ↓ ${n.reads ?? 0} reads</div>`}</div>`;
   }).join("");
   return `<div class="card"><div class="card-h"><h2>${esc(b.name)}</h2><span class="sub">${up} of ${b.nodes.length} nodes up</span>
     <span class="sub right num">holds ${money(b.total)}</span></div><div class="nodes">${nodes}</div></div>`;
@@ -586,7 +590,9 @@ async function refreshReplication() {
     const rows = d.nodes.map(n => {
       const key = d.account + n.name, changed = lastRep[key] !== undefined && lastRep[key] !== n.balance;
       lastRep[key] = n.balance;
-      const [cls, text] = n.error ? ["down", "Down"] : n.role === "primary" ? ["primary", "★ Primary"] : ["replica", "Replica"];
+      const live = S ? Object.values(S.branches).flatMap(b => b.nodes).find(x => x.name === n.name) : null;
+      const [cls, text] = n.error ? ["down", "Down"] : n.role === "primary" ? ["primary", "★ Primary"]
+        : live && live.role === "sync replica" ? ["sync", "Sync replica"] : ["replica", "Async replica"];
       return `<tr><td><b class="mono">${esc(n.name)}</b><div class="muted" style="font-size:12px">${esc(laptop(n.host))}</div></td>
         <td><span class="badge ${cls}">${text}</span></td>
         <td class="r num ${changed ? "flash" : ""}" style="font-weight:650;font-size:15px">${n.error ? "—" : money(n.balance)}</td></tr>`;
@@ -676,6 +682,18 @@ $("tx-go").onclick = async () => {
     $("tx-out").innerHTML = txResult(st, d);
   } catch (e) { $("tx-out").innerHTML = `<div class="errbox">Request failed.</div>`; }
   $("tx-go").disabled = false;
+};
+$("audit-go").onclick = async () => {
+  $("audit-go").disabled = true;
+  $("audit-out").innerHTML = `<div class="muted" style="margin-top:12px"><span class="dot warn live"></span> Auditing…</div>`;
+  try {
+    const r = await fetch("/api/reconcile"), d = await r.json();
+    $("audit-out").innerHTML = r.status !== 200
+      ? `<div class="errbox" style="margin-top:12px">${esc(d.detail || "audit failed")}</div>`
+      : d.ok ? `<div class="verdict-line ok">✓ Books balance: ${d.checked_accounts} accounts match their ledger, ${d.checked_ledger_txns} transactions net to ₹0, ${d.checked_2pc_txns} committed 2PC transfers have both halves.</div>`
+      : `<div class="errbox" style="margin-top:12px"><b>${d.mismatches.length} mismatch(es):</b><br>${d.mismatches.slice(0, 5).map(esc).join("<br>")}</div>`;
+  } catch (e) { $("audit-out").innerHTML = `<div class="errbox" style="margin-top:12px">Request failed.</div>`; }
+  $("audit-go").disabled = false;
 };
 function renderTxList(s) {
   if (!s.coord) { $("tx-list").innerHTML = "Coordinator log unreachable."; return; }

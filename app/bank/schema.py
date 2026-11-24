@@ -1,6 +1,7 @@
 """Creates the databases, tables and seed data. Safe to run repeatedly."""
 import time
 
+import psycopg
 from psycopg import sql
 
 from . import config, db
@@ -17,6 +18,13 @@ CREATE TABLE IF NOT EXISTS ledger (
     txn_id      text NOT NULL,
     account_id  text NOT NULL REFERENCES accounts(id),
     delta       numeric(14,2) NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+-- Idempotency keys of local (same-branch) transfers, written in the same
+-- transaction that moves the money.
+CREATE TABLE IF NOT EXISTS request_keys (
+    key         text PRIMARY KEY,
+    txn_id      text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 """
@@ -41,7 +49,20 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE INDEX IF NOT EXISTS txn_log_created ON txn_log (created_at DESC);
 CREATE INDEX IF NOT EXISTS txn_log_open ON txn_log (state)
     WHERE state IN ('STARTED', 'COMMITTING', 'ABORTING');
+-- Retry-safe requests: one transaction per Idempotency-Key (added later, so
+-- ALTER ... IF NOT EXISTS upgrades existing logs too).
+ALTER TABLE txn_log ADD COLUMN IF NOT EXISTS idempotency_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS txn_log_idempotency ON txn_log (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 """
+
+
+def _create(conn, statement) -> None:
+    """CREATE ROLE / DATABASE that tolerates another coordinator doing it at the same moment."""
+    try:
+        conn.execute(statement)
+    except (psycopg.errors.DuplicateObject, psycopg.errors.DuplicateDatabase, psycopg.errors.UniqueViolation):
+        pass
 
 
 def init_branch(branch: str) -> None:
@@ -49,13 +70,12 @@ def init_branch(branch: str) -> None:
     with db.connect_branch(branch, "write", user=config.PG_SUPERUSER,
                            password=config.PG_SUPERUSER_PASSWORD, dbname="postgres") as conn:
         if not conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (config.BANK_USER,)).fetchone():
-            conn.execute(
-                sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
-                    sql.Identifier(config.BANK_USER), sql.Literal(config.BANK_PASSWORD)))
+            _create(conn, sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(
+                sql.Identifier(config.BANK_USER), sql.Literal(config.BANK_PASSWORD)))
             conn.execute(sql.SQL("GRANT pg_monitor TO {}").format(
                 sql.Identifier(config.BANK_USER)))
         if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (config.BANK_DB,)).fetchone():
-            conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(
+            _create(conn, sql.SQL("CREATE DATABASE {} OWNER {}").format(
                 sql.Identifier(config.BANK_DB), sql.Identifier(config.BANK_USER)))
 
     # 2. As the application user: tables and seed rows.
@@ -63,11 +83,14 @@ def init_branch(branch: str) -> None:
         conn.execute(BRANCH_SCHEMA)
         if conn.execute("SELECT count(*) FROM accounts").fetchone()[0] == 0:
             with conn.transaction():
-                conn.execute("INSERT INTO accounts (id, owner, balance) VALUES (%s, %s, %s)",
+                # ON CONFLICT: another coordinator may be seeding at the same moment
+                conn.execute("INSERT INTO accounts (id, owner, balance) VALUES (%s, %s, %s) "
+                             "ON CONFLICT (id) DO NOTHING",
                              (config.vault_of(branch), f"{config.BRANCHES[branch]['name']} vault",
                               config.VAULT_BALANCE))
                 for i, name in enumerate(config.CUSTOMERS, start=1):
-                    conn.execute("INSERT INTO accounts (id, owner, balance) VALUES (%s, %s, %s)",
+                    conn.execute("INSERT INTO accounts (id, owner, balance) VALUES (%s, %s, %s) "
+                                 "ON CONFLICT (id) DO NOTHING",
                                  (f"{branch}-{1000 + i}", name, config.CUSTOMER_BALANCE))
 
 
@@ -80,7 +103,7 @@ def init_coord() -> None:
                                password=config.PG_SUPERUSER_PASSWORD, dbname="postgres") as conn:
             if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s",
                                 (config.COORD_LOG_DB,)).fetchone():
-                conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                _create(conn, sql.SQL("CREATE DATABASE {} OWNER {}").format(
                     sql.Identifier(config.COORD_LOG_DB), sql.Identifier(config.BANK_USER)))
     with db.connect_coord() as conn:
         conn.execute(COORD_SCHEMA)

@@ -135,6 +135,19 @@ class Election:
             self._leader.clear()
             self.log(f"[election] {self.name}: stepping down ({why}); now a standby")
 
+    def revoke(self) -> None:
+        """Planned shutdown: give the lease back so etcd deletes our keys now and a
+        standby takes over within one election round (~2 s) instead of waiting
+        out the 10 s TTL. A crash cannot do this, which is why the TTL exists."""
+        self._leader.clear()
+        if self.lease is not None:
+            try:
+                _post(self.etcd, "/v3/lease/revoke", {"ID": self.lease}, timeout=1.0)
+                self.log(f"[election] {self.name}: shutting down, lease revoked (instant handover)")
+            except Exception:
+                pass
+            self.lease = None
+
     # -- main loop (runs in its own thread)
     def run(self) -> None:
         self.log(f"[election] {self.name}: joining the election via etcd {self.etcd} "

@@ -19,6 +19,7 @@ to do with the transactions left "in doubt" on the branches:
     log says ABORTING    -> decision was abort    -> ROLLBACK PREPARED wherever still pending
 """
 import os
+import re
 import sys
 import threading
 import time
@@ -28,7 +29,7 @@ from decimal import Decimal
 from typing import Literal, Optional
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from psycopg import sql
 from pydantic import BaseModel, Field
@@ -74,18 +75,79 @@ class InsufficientFunds(BusinessError):
     status = 409
 
 
+class IdempotencyMismatch(BusinessError):
+    """The same Idempotency-Key was sent with a different request."""
+    status = 422
+
+
+class DuplicateRequest(Exception):
+    """A request with this Idempotency-Key was already executed (found on a branch)."""
+    def __init__(self, txn_id):
+        self.txn_id = txn_id
+
+
 # --------------------------------------------------------------------------
 # Coordinator log (the durable record of every distributed transaction)
 # --------------------------------------------------------------------------
-def log_insert(txn_id, kind, src, dst, amount, participants, state, note=None):
+def log_insert(txn_id, kind, src, dst, amount, participants, state, note=None, idem=None):
     with db.connect_coord() as c:
         c.execute(
-            "INSERT INTO txn_log (txn_id, kind, from_account, to_account, amount, participants, state, note) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-            (txn_id, kind, src, dst, amount, participants, state, note))
+            "INSERT INTO txn_log (txn_id, kind, from_account, to_account, amount, participants, state, note, "
+            "idempotency_key) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (txn_id, kind, src, dst, amount, participants, state, note, idem))
 
 
-def log_decide(txn_id, state) -> bool:
+# --------------------------------------------------------------------------
+# Idempotency: a client that lost the response (e.g. during a failover) can
+# safely retry with the same Idempotency-Key; the transfer runs at most once.
+#   2PC:   the key is stored in the coordinator log row written BEFORE any
+#          work, under a unique index, so a duplicate cannot even start.
+#   local: the key is inserted on the branch INSIDE the same transaction that
+#          moves the money, so "money moved" and "key recorded" are atomic.
+# --------------------------------------------------------------------------
+def find_by_key(idem):
+    with db.connect_coord() as c:
+        return c.execute(
+            "SELECT txn_id, kind, from_account, to_account, amount, state FROM txn_log "
+            "WHERE idempotency_key = %s", (idem,)).fetchone()
+
+
+def find_by_key_or_none(idem):
+    """Like find_by_key, but None if the log database is unreachable: a local
+    transfer can still be made retry-safe by its branch alone (request_keys)."""
+    try:
+        return find_by_key(idem)
+    except Exception:
+        return None
+
+
+def replay(idem, src, dst, amount, txn_id=None, kind="local", state="COMMITTED"):
+    """The answer to a retried request: the original outcome, nothing executed."""
+    row = find_by_key_or_none(idem)
+    if row:
+        txn_id, kind, r_src, r_dst, r_amount, state = row
+        if (r_src, r_dst, Decimal(r_amount)) != (src, dst, Decimal(amount)):
+            raise IdempotencyMismatch(
+                f"Idempotency-Key {idem!r} was already used for {r_src} -> {r_dst} {r_amount}")
+    return {"txn_id": txn_id, "kind": kind, "state": state, "replayed": True,
+            "steps": [f"     0 ms  idempotent replay: key {idem!r} was already processed as txn {txn_id} "
+                      f"({state}); nothing was executed again"]}
+
+
+def commit_lsns(branches) -> dict:
+    """WAL position on each branch's primary right after our commit. A client can
+    pass it back as ?min_lsn= to read its own write from a replica (causal read)."""
+    out = {}
+    for b in branches:
+        try:
+            with db.connect_branch(b) as conn:
+                out[b] = conn.execute("SELECT pg_current_wal_lsn()::text").fetchone()[0]
+        except Exception:
+            out[b] = None
+    return out
+
+
+def log_decide(txn_id, state, note=None) -> bool:
     """Record the COMMIT/ABORT decision, but only if nobody decided yet.
 
     This compare-and-set on the replicated log is the fencing rule between
@@ -93,15 +155,19 @@ def log_decide(txn_id, state) -> bool:
     aborted (state no longer STARTED), the old leader's COMMIT is refused."""
     with db.connect_coord() as c:
         cur = c.execute(
-            "UPDATE txn_log SET state = %s, updated_at = now() WHERE txn_id = %s AND state = 'STARTED'",
-            (state, txn_id))
+            "UPDATE txn_log SET state = %s, note = COALESCE(%s, note), updated_at = now() "
+            "WHERE txn_id = %s AND state = 'STARTED'",
+            (state, note, txn_id))
         return cur.rowcount == 1
 
 
 def log_state(txn_id, state, note=None):
+    """Move a transaction forward. Monotonic: a final state (COMMITTED/ABORTED)
+    is never overwritten, so a late or deposed writer cannot regress it."""
     with db.connect_coord() as c:
         c.execute(
-            "UPDATE txn_log SET state = %s, note = COALESCE(%s, note), updated_at = now() WHERE txn_id = %s",
+            "UPDATE txn_log SET state = %s, note = COALESCE(%s, note), updated_at = now() "
+            "WHERE txn_id = %s AND state NOT IN ('COMMITTED', 'ABORTED')",
             (state, note, txn_id))
 
 
@@ -122,10 +188,16 @@ def apply_move(conn, txn_id: str, account: str, delta: Decimal) -> None:
                  (txn_id, account, delta))
 
 
-def local_transaction(branch: str, txn_id: str, moves: list) -> None:
+def local_transaction(branch: str, txn_id: str, moves: list, idem=None) -> None:
     """Ordinary single-database transaction (both accounts in the same branch)."""
     with db.connect_branch(branch) as conn:
         with conn.transaction():
+            if idem:
+                got = conn.execute("INSERT INTO request_keys (key, txn_id) VALUES (%s, %s) "
+                                   "ON CONFLICT (key) DO NOTHING RETURNING key", (idem, txn_id)).fetchone()
+                if not got:          # executed before: roll back this attempt, report the original
+                    first = conn.execute("SELECT txn_id FROM request_keys WHERE key = %s", (idem,)).fetchone()
+                    raise DuplicateRequest(first[0] if first else None)
             for account, delta in sorted(moves):      # fixed lock order avoids deadlocks
                 apply_move(conn, txn_id, account, delta)
 
@@ -199,13 +271,16 @@ def crash(where: str) -> None:
 # --------------------------------------------------------------------------
 # The transfer
 # --------------------------------------------------------------------------
-def do_transfer(src: str, dst: str, amount: Decimal, fault: Optional[str] = None) -> dict:
+def do_transfer(src: str, dst: str, amount: Decimal, fault: Optional[str] = None,
+                idem: Optional[str] = None) -> dict:
     if src == dst:
         raise BusinessError("source and destination are the same account")
     try:
         src_branch, dst_branch = config.branch_of(src), config.branch_of(dst)
     except ValueError as e:
         raise AccountNotFound(str(e))
+    if idem and find_by_key_or_none(idem):
+        return replay(idem, src, dst, amount)
     txn_id = uuid.uuid4().hex[:12]
     steps = []
     t0 = time.perf_counter()
@@ -216,13 +291,16 @@ def do_transfer(src: str, dst: str, amount: Decimal, fault: Optional[str] = None
     # ---------------- same branch: plain local transaction ----------------
     if src_branch == dst_branch:
         try:
-            local_transaction(src_branch, txn_id, [(src, -amount), (dst, amount)])
+            local_transaction(src_branch, txn_id, [(src, -amount), (dst, amount)], idem)
+        except DuplicateRequest as d:
+            return replay(idem, src, dst, amount, txn_id=d.txn_id)
         except BusinessError as e:
             _log_local(txn_id, src, dst, amount, src_branch, "ABORTED", str(e))
             raise
         step(f"local transaction committed on branch {src_branch}")
-        _log_local(txn_id, src, dst, amount, src_branch, "COMMITTED")
-        return {"txn_id": txn_id, "kind": "local", "state": "COMMITTED", "steps": steps}
+        _log_local(txn_id, src, dst, amount, src_branch, "COMMITTED", idem=idem)
+        return {"txn_id": txn_id, "kind": "local", "state": "COMMITTED", "steps": steps,
+                "lsn": commit_lsns([src_branch])}
 
     # ---------------- different branches: two-phase commit ----------------
     gid = gid_of(txn_id)
@@ -232,7 +310,10 @@ def do_transfer(src: str, dst: str, amount: Decimal, fault: Optional[str] = None
     work = sorted([(src_branch, src, -amount), (dst_branch, dst, amount)])
     participants = [w[0] for w in work]
 
-    log_insert(txn_id, "2pc", src, dst, amount, participants, "STARTED")
+    try:
+        log_insert(txn_id, "2pc", src, dst, amount, participants, "STARTED", idem=idem)
+    except psycopg.errors.UniqueViolation:
+        return replay(idem, src, dst, amount)        # a concurrent duplicate got there first
     step("coordinator log: STARTED")
 
     # Phase 1: prepare everywhere
@@ -243,7 +324,13 @@ def do_transfer(src: str, dst: str, amount: Decimal, fault: Optional[str] = None
     except Exception as e:
         reason = str(e).splitlines()[0][:200]
         step(f"phase 1 failed: {reason}")
-        log_state(txn_id, "ABORTING", reason)
+        # Decide ABORT only if no decision exists yet (a newly elected leader may
+        # already have decided). Rolling back on every participant is still right:
+        # a branch whose PREPARE was never sent has nothing prepared and returns at
+        # once; an unreachable one may or may not have prepared, so recovery waits.
+        if not log_decide(txn_id, "ABORTING", reason):
+            step("another coordinator already decided this transfer; it finishes it")
+            raise HTTPException(503, {"txn_id": txn_id, "error": f"transfer aborted: {reason}", "steps": steps})
         if all([finish_on_branch(b, gid, "ROLLBACK") for b in participants]):
             log_state(txn_id, "ABORTED")
             step("rolled back on all branches: ABORTED")
@@ -280,15 +367,16 @@ def do_transfer(src: str, dst: str, amount: Decimal, fault: Optional[str] = None
     if done:
         log_state(txn_id, "COMMITTED")
         step("coordinator log: COMMITTED")
-        return {"txn_id": txn_id, "kind": "2pc", "state": "COMMITTED", "steps": steps}
+        return {"txn_id": txn_id, "kind": "2pc", "state": "COMMITTED", "steps": steps,
+                "lsn": commit_lsns(participants)}
     # The decision is made and durable, so the transfer WILL complete; a branch
     # was just unreachable (e.g. mid-failover). The recovery loop finishes it.
     return {"txn_id": txn_id, "kind": "2pc", "state": "COMMITTING", "steps": steps}
 
 
-def _log_local(txn_id, src, dst, amount, branch, state, note=None):
+def _log_local(txn_id, src, dst, amount, branch, state, note=None, idem=None):
     try:
-        log_insert(txn_id, "local", src, dst, amount, [branch], state, note)
+        log_insert(txn_id, "local", src, dst, amount, [branch], state, note, idem)
     except Exception as e:          # history only; a local transfer does not depend on it
         log(f"[log] could not record local txn {txn_id}: {type(e).__name__}")
 
@@ -316,7 +404,8 @@ def recover(startup: bool = False) -> list:
                     "RETURNING txn_id").fetchall()
             for (txn_id,) in rows:
                 log(f"[recovery] txn {txn_id}: STARTED with no decision -> ABORTING (presumed abort)")
-            min_age = "0 seconds" if startup else "3 seconds"   # don't race live requests
+            # Don't race a live request still finishing phase 2 (statements may take up to 8 s).
+            min_age = "0 seconds" if startup else "15 seconds"
             pending = c.execute(
                 "SELECT txn_id, state, participants FROM txn_log "
                 "WHERE state IN ('COMMITTING', 'ABORTING') AND updated_at <= now() - %s::interval "
@@ -352,15 +441,21 @@ def sweep_orphans() -> None:
                     "AND database = current_database() AND prepared < now() - interval '15 seconds'")]
         except Exception:
             continue                                  # branch unreachable: next pass
-        for gid in gids:
-            with db.connect_coord() as c:
+        if not gids:
+            continue
+        # A prepared transaction with NO log row is deliberately left alone: the log
+        # always gets its row before PREPARE, so a missing row means it belongs to
+        # another log (an older coordinator, or history from before the log moved),
+        # and presuming abort could undo half of a transfer committed elsewhere.
+        with db.connect_coord() as c:
+            for gid in gids:
                 row = c.execute("SELECT state FROM txn_log WHERE txn_id = %s", (gid[len("bank-"):],)).fetchone()
-            action = {"COMMITTED": "COMMIT", "ABORTED": "ROLLBACK"}.get(row[0] if row else None)
-            if action and finish_on_branch(branch, gid, action):
-                log(f"[recovery] orphan {gid} on branch {branch}: log says {row[0]} -> {action} PREPARED")
+                action = {"COMMITTED": "COMMIT", "ABORTED": "ROLLBACK"}.get(row[0] if row else None)
+                if action and finish_on_branch(branch, gid, action):
+                    log(f"[recovery] orphan {gid} on branch {branch}: log says {row[0]} -> {action} PREPARED")
 
 
-def take_over() -> None:
+def take_over() -> bool:
     """Just became leader: whatever the previous leader left half-done is resolved
     from the log before we accept new transfers."""
     log("[startup] running crash recovery" if not election else
@@ -373,10 +468,13 @@ def take_over() -> None:
             + (f", {waiting} waiting for an unreachable branch (will retry)" if waiting else "")
             if report else "[recovery] finished, nothing in doubt")
     except Exception as e:
-        log(f"[recovery] deferred: {type(e).__name__}: {e}")
+        # Do not accept transfers before recovery has run: retry the takeover.
+        log(f"[recovery] failed, will retry before serving: {type(e).__name__}: {e}")
+        return False
     ready.set()
     log("[startup] coordinator ready" if not election else
         f"[election] {config.COORDINATOR_NAME} is serving transfers")
+    return True
 
 
 def background() -> None:
@@ -388,13 +486,13 @@ def background() -> None:
     while True:
         leading = is_leader()
         if leading and not was_leader:
-            take_over()
+            leading = take_over()            # False: recovery failed, try again next tick
         elif was_leader and not leading:
             ready.clear()
             log(f"[election] {config.COORDINATOR_NAME} lost leadership: standing by, not accepting transfers")
         was_leader = leading
         time.sleep(2 if leading else 1)
-        if not leading:
+        if not leading or not is_leader():   # re-check: leadership may have gone while we slept
             continue
         tick += 1
         try:   # leader only: keep retrying whatever could not be finished yet
@@ -419,6 +517,8 @@ def background() -> None:
 async def lifespan(app: FastAPI):
     threading.Thread(target=background, daemon=True).start()
     yield
+    if election:            # planned stop: hand over at once instead of after the 10 s lease
+        election.revoke()
 
 
 app = FastAPI(title="Distributed Bank: coordinator", lifespan=lifespan)
@@ -434,6 +534,13 @@ class TransferRequest(BaseModel):
 class CashRequest(BaseModel):
     account: str
     amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
+
+
+def vault_for(account: str) -> str:
+    try:
+        return config.vault_of(config.branch_of(account))
+    except ValueError as e:
+        raise AccountNotFound(str(e))
 
 
 def require_ready():
@@ -470,28 +577,36 @@ def health():
 
 
 @app.post("/transfer")
-def transfer(req: TransferRequest):
-    return run(do_transfer, req.from_account.upper(), req.to_account.upper(), req.amount, req.fault)
+def transfer(req: TransferRequest, idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key",
+                                                description="retry-safe: same key = executed at most once")):
+    return run(do_transfer, req.from_account.upper(), req.to_account.upper(), req.amount, req.fault,
+               idempotency_key)
 
 
 @app.post("/deposit")
-def deposit(req: CashRequest):
+def deposit(req: CashRequest, idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key",
+                                                description="retry-safe: same key = executed at most once")):
     """Cash in: money moves from the branch vault to the customer."""
     acct = req.account.upper()
-    return run(lambda: do_transfer(config.vault_of(config.branch_of(acct)), acct, req.amount))
+    return run(lambda: do_transfer(vault_for(acct), acct, req.amount, None, idempotency_key))
 
 
 @app.post("/withdraw")
-def withdraw(req: CashRequest):
+def withdraw(req: CashRequest, idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key",
+                                                description="retry-safe: same key = executed at most once")):
     """Cash out: money moves from the customer to the branch vault."""
     acct = req.account.upper()
-    return run(lambda: do_transfer(acct, config.vault_of(config.branch_of(acct)), req.amount))
+    return run(lambda: do_transfer(acct, vault_for(acct), req.amount, None, idempotency_key))
 
 
 @app.get("/accounts/{account_id}")
 def get_account(account_id: str,
-                consistent: bool = Query(False, description="read from the primary instead of a replica")):
+                consistent: bool = Query(False, description="read from the primary instead of a replica"),
+                min_lsn: Optional[str] = Query(None, description="read-your-writes: the 'lsn' a write "
+                                               "returned; a replica serves only once it has replayed it")):
     account_id = account_id.upper()
+    if min_lsn and not re.fullmatch(r"[0-9A-Fa-f]{1,8}/[0-9A-Fa-f]{1,8}", min_lsn):
+        raise HTTPException(400, "min_lsn must look like 0/3000060")
 
     def read():
         try:
@@ -499,6 +614,16 @@ def get_account(account_id: str,
         except ValueError as e:
             raise AccountNotFound(str(e))
         conn = db.connect_branch(branch, "write") if consistent else db.connect_read(branch)
+        note = None
+        if min_lsn and not consistent:
+            # Causal consistency: has this replica replayed the caller's write yet?
+            # (On a primary pg_last_wal_replay_lsn() is NULL: it has everything.)
+            caught_up = conn.execute(
+                "SELECT COALESCE(pg_last_wal_replay_lsn() >= %s::pg_lsn, true)", (min_lsn,)).fetchone()[0]
+            if not caught_up:
+                conn.close()
+                conn = db.connect_branch(branch, "write")
+                note = "primary (replica had not replayed min_lsn yet)"
         with conn:
             row = conn.execute(
                 "SELECT id, owner, balance, pg_is_in_recovery() FROM accounts WHERE id = %s",
@@ -506,7 +631,7 @@ def get_account(account_id: str,
         if not row:
             raise AccountNotFound(f"account {account_id} does not exist")
         return {"id": row[0], "owner": row[1], "balance": row[2],
-                "served_by": "replica" if row[3] else "primary"}
+                "served_by": note or ("replica" if row[3] else "primary")}
     return run(read)
 
 
@@ -532,6 +657,65 @@ def transactions(limit: int = Query(20, ge=1, le=200)):
         keys = ["txn_id", "kind", "from_account", "to_account", "amount", "state", "note", "created_at"]
         return [dict(zip(keys, r)) for r in rows]
     return run(read)
+
+
+@app.get("/audit/reconcile")
+def audit_reconcile():
+    """Double-entry audit of the whole bank, read from the branch primaries.
+
+    1. Every account: balance == opening balance + sum of its ledger rows
+       (no money moved without a ledger record, and none recorded without moving).
+    2. Every transaction's ledger rows sum to zero across all branches
+       (money only ever moves, it is never created or destroyed).
+    3. Every COMMITTED transfer in the coordinator log has its debit and credit
+       in the ledger; no ABORTED transfer left any ledger row.
+    Transfers still in flight (not yet final in the log) are skipped."""
+    def audit():
+        problems, n_accounts, per_txn = [], 0, {}
+        # Read the log FIRST: whatever it already calls COMMITTED finished on every
+        # branch before this point, so the ledgers read next must show all of it.
+        with db.connect_coord() as c:
+            logged = {r[0]: r[1:] for r in c.execute(
+                "SELECT txn_id, state, kind, amount, participants FROM txn_log")}
+        for branch in config.BRANCHES:
+            with db.connect_branch(branch) as conn:
+                rows = conn.execute(
+                    "SELECT a.id, a.balance, COALESCE(sum(l.delta), 0) FROM accounts a "
+                    "LEFT JOIN ledger l ON l.account_id = a.id GROUP BY a.id, a.balance").fetchall()
+                for acct, bal, moved in rows:
+                    n_accounts += 1
+                    opening = config.VAULT_BALANCE if acct.endswith("VAULT") else config.CUSTOMER_BALANCE
+                    if bal != opening + moved:
+                        problems.append(f"{acct}: balance {bal} but opening {opening} + ledger {moved} = {opening + moved}")
+                for txn_id, total, count, settled in conn.execute(
+                        "SELECT txn_id, sum(delta), count(*), max(created_at) < now() - interval '30 seconds' "
+                        "FROM ledger GROUP BY txn_id"):
+                    t = per_txn.setdefault(txn_id, {"sum": Decimal(0), "rows": 0, "branches": set(), "settled": True})
+                    t["sum"] += total
+                    t["rows"] += count
+                    t["branches"].add(branch)
+                    t["settled"] = t["settled"] and settled
+        n_2pc = 0
+        for txn_id, (state, kind, amount, participants) in logged.items():
+            t = per_txn.get(txn_id)
+            if state == "ABORTED" and t:
+                problems.append(f"txn {txn_id}: ABORTED but left {t['rows']} ledger row(s)")
+            if state == "COMMITTED":
+                n_2pc += kind == "2pc"
+                if not t:
+                    problems.append(f"txn {txn_id}: COMMITTED but has no ledger rows")
+                elif kind == "2pc" and t["branches"] != set(participants):
+                    problems.append(f"txn {txn_id}: COMMITTED but ledger only on {sorted(t['branches'])}")
+        for txn_id, t in per_txn.items():
+            if txn_id in logged:
+                in_flight = logged[txn_id][0] not in ("COMMITTED", "ABORTED")
+            else:            # started after we read the log, or older history from another log
+                in_flight = not t["settled"]
+            if t["sum"] != 0 and not in_flight:
+                problems.append(f"txn {txn_id}: ledger rows sum to {t['sum']}, not 0")
+        return {"ok": not problems, "checked_accounts": n_accounts, "checked_ledger_txns": len(per_txn),
+                "checked_2pc_txns": n_2pc, "mismatches": problems[:50]}
+    return run(audit)
 
 
 @app.post("/recover")

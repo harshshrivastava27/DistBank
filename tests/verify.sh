@@ -47,6 +47,9 @@ t_api()         { check api; }
 t_replication() { check replication A && check replication B; }
 t_lb()          { check loadbalancing A && check loadbalancing B; }
 t_concurrency() { check concurrency; }
+t_idempotency() { check idempotency; }
+t_causal()      { check causal-read; }
+t_reconcile()   { check reconcile; }
 
 crash_and_recover() {  # <fault>
   local out b
@@ -154,6 +157,7 @@ t_coord_db_outage() {
   docker stop coord-db >/dev/null
   echo "  coordinator log database stopped"
   check cross-branch down && check writes A ok && check writes B ok || return 1
+  check idempotency-local A || return 1
   docker start coord-db >/dev/null
   sleep 5
   check cross-branch ok
@@ -192,6 +196,9 @@ run "Bank API: valid and invalid transfers, deposits, reads"                 t_a
 run "Replication: writes reach both replicas; replicas are read-only"        t_replication
 run "Load balancing: reads spread over replicas, writes only to primary"     t_lb
 run "Concurrency: 150 parallel transfers, no lost updates, no deadlock"      t_concurrency
+run "Idempotency: a retried request (same key) executes exactly once"        t_idempotency
+run "Causal reads: a read with the write's LSN always sees the write"        t_causal
+run "Ledger audit: balances match the ledger, every transfer nets to zero"   t_reconcile
 run "Recovery: coordinator crash before the decision -> rolled back"         t_crash_before
 run "Recovery: coordinator crash after the decision -> committed"            t_crash_after
 run "Recovery: coordinator crash between the two commits -> completed"       t_crash_mid
@@ -208,6 +215,7 @@ if [ "$MODE" != "quick" ]; then
   run "Whole branch down: other branch unaffected, coordinator can restart"  t_branch_outage
   run "Persistence: data survives removing and recreating all containers"    t_persistence
 fi
+run "Ledger audit after all the failures: still balanced"                    t_reconcile
 run "Final state: total correct, nothing in doubt"                           t_final
 
 echo

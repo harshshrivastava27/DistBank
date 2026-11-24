@@ -11,6 +11,10 @@ A small bank whose accounts are split across two independent PostgreSQL clusters
 | Recovery | The coordinator keeps a durable log and uses it after a crash to commit or roll back in-doubt transactions; a crashed database node rejoins and catches up from the write-ahead log | `./demo.sh crash before` / `after` / `mid`, then `./demo.sh recover` |
 | Load balancing | HAProxy sends writes to the primary and spreads reads round-robin over the replicas | Per-node "served" counters on the dashboard and http://localhost:8404 |
 
+The dashboard is a guided demo: **six numbered tabs, one per topic** (Replication, Load balancing, Distributed transaction, Fault tolerance, Availability, Recovery). Each explains the idea in one sentence, lists the steps with buttons or copyable commands, and shows the live proof. Open a tab directly with `#rep`, `#lb`, `#tx`, `#ft`, `#av` or `#rc` after the address.
+
+It also runs **across several laptops** (section 12): every laptop holds one node of each branch and a member of a 3-node etcd cluster, and the coordinators on the laptops **elect a leader**, so switching off any one laptop is survived automatically.
+
 One number ties it together: **the total money in the bank must always be ₹22,00,000.00**. The dashboard shows it at the top. Whatever you kill, it must come back to that figure.
 
 ---
@@ -57,7 +61,7 @@ To stop: `./demo.sh down` (keeps data). To wipe everything and start fresh: `./d
 ./tests/verify.sh           # about 6 minutes, kills and restarts nodes
 ```
 
-This runs 19 automated tests (9 in quick mode) and prints PASS or FAIL for each: the API, replication, load balancing, concurrency, all three coordinator-crash recoveries, failover under load, node rejoin, and outages of etcd, HAProxy, the coordinator's log database and a whole branch. Run it once after your first start, and again on the morning of the demo. It needs only bash and docker.
+This runs 23 automated tests (13 in quick mode) and prints PASS or FAIL for each: the API, replication, load balancing, concurrency, retry-safe (idempotent) requests, read-your-writes reads, a double-entry ledger audit, all three coordinator-crash recoveries, failover under load, node rejoin, and outages of etcd, HAProxy, the coordinator's log database and a whole branch. Run it once after your first start, and again on the morning of the demo. It needs only bash and docker.
 
 ## 3. What is running
 
@@ -132,7 +136,7 @@ Start traffic in a second terminal and leave it running:
 ./demo.sh load
 ```
 
-Balances flash on the dashboard as they change. The account tables are read from replicas, so you are watching replication happen. The "served" counters under each node show writes going only to the primary and reads spread evenly over the two replicas. http://localhost:8404 shows the same thing in HAProxy's own page.
+In tab 1 (Replication) the same balance is read directly from all three nodes, so you watch each write arrive on the replicas. The "writes · reads" counters under each node, and tab 2 (Load balancing), show writes going only to the primary and reads spread evenly over the two replicas. http://localhost:8404 shows the same thing in HAProxy's own page.
 
 ### Step 4. Kill a primary: fault tolerance and availability (2 min)
 
@@ -160,7 +164,7 @@ The old primary comes back as a **Replica**: it notices it is no longer the lead
 
 ### Step 6. Crash the coordinator mid-transaction: distributed recovery (3 min)
 
-Stop the load generator first (Ctrl-C) so the screen is calm. There are three variants. Each can also be triggered from the dashboard's "Failure to inject" drop-down.
+Stop the load generator first (Ctrl-C) so the screen is calm. There are three variants. Each can also be triggered from the dashboard's tab 6 (Recovery).
 
 **a) Crash after PREPARE, before any decision**
 
@@ -277,7 +281,32 @@ Two details worth knowing, because they are the kind of thing that goes wrong in
 - "Not listed, so already done" is only trusted on a fully promoted primary. During a failover a connection can briefly land on a node that is still a standby, and standbys do not list prepared transactions. The code checks `pg_is_in_recovery()` first. This was a real bug found while testing this project under repeated failovers.
 - `sweep_orphans` is a safety net from the participants' side: every 10 seconds it asks each branch for prepared transactions older than 15 seconds and applies the coordinator log's final verdict if there is one. A prepared transaction can never hold locks forever.
 
+A prepared transaction with **no** row in the log is deliberately left alone. The log row is always written before PREPARE, so a missing row means the transaction belongs to a different log (an older coordinator, or history from before the log moved); presuming "abort" there could undo half of a transfer that was committed elsewhere.
+
 The coordinator can restart while a branch is completely down. It remembers in its log database which branches were set up, starts without the missing one, resolves what it can, and retries the rest when the branch returns.
+
+### Coordinator leader election (multi-laptop mode)
+
+Several coordinators run, one per laptop; exactly one is the **leader** and accepts transfers (`app/bank/leader.py`):
+
+1. Each coordinator holds an etcd **lease** (10 s time-to-live) and renews it every 2 s.
+2. To lead, it creates the key `/distbank/coordinator/leader` attached to its lease **only if the key does not exist** (an etcd transaction on `create_revision == 0`). etcd is linearizable, so only one can win.
+3. If the leader dies, its lease expires and etcd deletes the key; the next standby to try wins, **runs recovery from the log**, and then serves. A planned stop revokes the lease, so the handover is immediate.
+4. A leader that cannot renew for 6 s steps down by itself, before its lease can expire, so two coordinators never both act as leader. As a second fence, the COMMIT decision is a compare-and-set on the log (`... WHERE state = 'STARTED'`): if a new leader already presumed the transfer aborted, the old leader's commit is refused.
+
+In this mode the coordinator's log is the `coordlog` database inside Branch A's replicated cluster, so every candidate reads the same log and it survives the loss of any one laptop.
+
+### Retry-safe requests (idempotency)
+
+A client that lost a response (for example during a failover) cannot know whether its transfer ran. Sending the header `Idempotency-Key: <any unique string>` makes a retry safe: the transfer executes **at most once**, and a retry returns the original outcome with `"replayed": true`. For two-phase commit the key is stored in the coordinator log row written before any work, under a unique index; for a local transfer it is inserted on the branch **inside the same transaction that moves the money**, so "money moved" and "key recorded" are atomic. Reusing a key for a different request is rejected with 422.
+
+### Read-your-writes (causal consistency)
+
+Replica reads can be slightly behind. Every transfer, deposit and withdrawal returns `"lsn"`: the write-ahead-log position of the branch primary right after the commit. A read with `GET /accounts/A-1001?min_lsn=<that lsn>` is served by a replica only if `pg_last_wal_replay_lsn()` has reached it; otherwise it falls back to the primary (`"served_by": "primary (replica had not replayed min_lsn yet)"`). The caller always sees its own write, while most reads still go to replicas.
+
+### Ledger audit (double-entry reconciliation)
+
+Every money movement also writes a row to the branch's `ledger` table, in the same transaction. `GET /audit/reconcile` (button in dashboard tab 3) checks, on the branch primaries, that every account's balance equals its opening balance plus its ledger rows, that every transaction's ledger rows sum to zero across both branches, and that every COMMITTED transfer in the coordinator log has both halves while no ABORTED one left any. Transfers still in flight are skipped.
 
 ## 7. Project layout
 
@@ -297,13 +326,21 @@ distbank/
       config.py             branches, ports, seed data, shard routing rule
       db.py                 connection helpers (always through HAProxy)
       schema.py             creates databases, tables and seed accounts
-      coordinator.py        bank API, two-phase commit, crash injection, recovery
+      coordinator.py        bank API, two-phase commit, crash injection, recovery, ledger audit
+      leader.py             coordinator leader election on etcd (multi-laptop mode)
       dashboard.py          data feed for the status page
       loadgen.py            traffic generator
       checks.py             assertions used by the test suite
       static/dashboard.html the status page
   tests/
-    verify.sh               19 end-to-end tests (see section 2)
+    verify.sh               23 end-to-end tests (see section 2)
+  multi/                    running across several laptops (section 12)
+    cluster.env             which laptop runs what (the same file on every laptop)
+    cluster.sh              helper: etcd, node, candidate, status, leader, check, ...
+    docker-compose.etcd.yml       one member of the 3-laptop etcd cluster
+    docker-compose.nodes.yml      this laptop's database nodes
+    docker-compose.candidate.yml  this laptop's HAProxy + coordinator candidate + dashboard
+    haproxy.cfg             HAProxy addressing nodes by laptop IP
 ```
 
 ## 8. API
@@ -312,9 +349,10 @@ Base address http://localhost:8000. Try it interactively at `/docs`.
 
 | Call | Purpose |
 |---|---|
-| `POST /transfer` `{"from_account":"A-1001","to_account":"B-1002","amount":500}` | Transfer. Optional `"fault"`: `crash_before_decision`, `crash_after_decision`, `crash_mid_commit` |
-| `POST /deposit`, `POST /withdraw` `{"account":"A-1001","amount":100}` | Cash in / out against the branch vault |
-| `GET /accounts/A-1001` | Balance, read from a replica. Add `?consistent=true` to read from the primary |
+| `POST /transfer` `{"from_account":"A-1001","to_account":"B-1002","amount":500}` | Transfer. Optional `"fault"`: `crash_before_decision`, `crash_after_decision`, `crash_mid_commit`. Optional header `Idempotency-Key` makes retries safe. The reply includes `"lsn"` |
+| `POST /deposit`, `POST /withdraw` `{"account":"A-1001","amount":100}` | Cash in / out against the branch vault (same `Idempotency-Key` and `"lsn"`) |
+| `GET /accounts/A-1001` | Balance, read from a replica. `?consistent=true` reads from the primary; `?min_lsn=<lsn>` reads your own write (replica if caught up, else primary) |
+| `GET /audit/reconcile` | Double-entry ledger audit of the whole bank |
 | `GET /accounts` | All accounts |
 | `GET /transactions?limit=20` | Recent coordinator log entries |
 | `POST /recover` | Run a recovery pass now |
@@ -332,8 +370,8 @@ You can also connect any SQL client straight to the clusters through HAProxy: ho
 
 ## 10. Known limits (good answers for question time)
 
-- **The coordinator is a single point of failure for cross-branch transfers.** While it is down, prepared transactions stay locked. This is the classic blocking weakness of two-phase commit; real systems replace the single coordinator with a replicated one (Paxos/Raft commit, as in Spanner or CockroachDB). Local transfers inside one branch do not depend on it at the database level.
-- **etcd is a single node here.** If it dies, the databases keep running (failsafe mode) but no failover can happen until it is back. Production uses 3 or 5 etcd nodes.
+- **On one laptop, the coordinator is a single point of failure for cross-branch transfers.** While it is down, prepared transactions stay locked: the classic blocking weakness of two-phase commit. The multi-laptop mode (section 12) removes it with a standby coordinator elected through etcd, which takes over in about 10 s; real systems go further and replicate the commit decision itself (Paxos/Raft commit, as in Spanner or CockroachDB).
+- **On one laptop, etcd is a single node.** If it dies, the databases keep running (failsafe mode) but no failover can happen until it is back. The multi-laptop mode runs 3 etcd members, one per laptop, which survive the loss of any one.
 - **HAProxy is a single node too.** Restarting it is harmless, but while it is down nothing can reach the databases. Production runs two with a floating IP.
 - **Two-phase commit gives atomicity, not cross-shard isolation.** Between "committed on A" and "committed on B" (normally a few milliseconds) a reader that sums both branches sees the money missing. The dashboard labels this "settling". A globally consistent snapshot needs more machinery (global timestamps or snapshot coordination).
 - **Replica reads can be slightly stale.** One replica is synchronous for durability, but "received" is not "applied", and the other replica is asynchronous. `?consistent=true` reads from the primary.
@@ -344,7 +382,7 @@ You can also connect any SQL client straight to the clusters through HAProxy: ho
 
 Everything in this folder was run as a real 12-container Docker Compose stack, using the unmodified `docker-compose.yml` and building both Dockerfiles.
 
-**Automated suite (`tests/verify.sh`): 19 of 19 pass on three consecutive full runs**, the last one from a freshly unzipped copy with the images rebuilt from nothing.
+**Automated suite (`tests/verify.sh`): all 23 pass.** (The original 19 passed on three consecutive full runs, the last from a freshly unzipped copy with the images rebuilt from nothing; the four idempotency, read-your-writes and ledger-audit runs were added later.)
 
 | Area | What the tests establish |
 |---|---|
@@ -358,6 +396,9 @@ Everything in this folder was run as a real 12-container Docker Compose stack, u
 | Availability | Branch keeps working with both replicas dead; etcd outage of 30 s does not interrupt reads or writes; HAProxy restart is transparent |
 | Outages | Coordinator log database down: cross-branch refused cleanly, local transfers continue. Whole branch down: other branch unaffected and the coordinator can restart |
 | Persistence | Data survives `docker compose down` followed by `up` |
+| Idempotency | The same request sent twice with one `Idempotency-Key` moves money once (local and 2PC); the key reused with a different amount is rejected (422) |
+| Read-your-writes | Ten deposits, each read back with its commit LSN: every read sees its write |
+| Ledger audit | Balances equal opening balance + ledger; every transaction nets to zero; run again after all the failure tests: still balanced |
 
 **Soak test.** Six primary failovers in a row (three clean, three hard kills) under continuous load from six clients: 2,198 transfers committed, 5,087 reads with 0 failures, total correct at the end, and the safety-net sweep never had to repair anything.
 
@@ -379,3 +420,26 @@ Everything in this folder was run as a real 12-container Docker Compose stack, u
 - `demo.sh` and `tests/verify.sh` under Git Bash and under macOS's older bash 3.2 (they pass `shellcheck` and avoid newer bash features, but were only run with bash 5).
 
 `./tests/verify.sh` exists to close that gap: run it on your own machine and you have the same evidence there.
+
+## 12. Running on several laptops (`multi/`)
+
+The same system spread over three laptops on one Wi-Fi network. Each laptop runs:
+
+- **one etcd member** (3 together: elections keep working while any 2 are up),
+- **one node of each branch** (so each branch has its 3 copies on 3 laptops),
+- **a coordinator candidate** with its own HAProxy and dashboard (one leader is elected, the rest stand by).
+
+Switching off any one laptop is survived: Patroni promotes new primaries, a standby coordinator takes over and finishes any half-done transfer, and transfers resume after about 30 seconds (database failover about 20 s, coordinator takeover about 10 s, partly in parallel).
+
+Setup, from the `multi` folder, with **the same `cluster.env` on every laptop** (laptop IPs, which nodes run where, `ETCD_IPS`, `LAPTOP_NAMES`):
+
+```bash
+./cluster.sh etcd up                    # on every laptop; then wait for:
+./cluster.sh check-etcd                 #   "3 of 3 members healthy"
+./cluster.sh node up pg-a1 pg-b1        # each laptop: the nodes cluster.env gives it
+./cluster.sh candidate up               # each laptop: coordinator candidate + dashboard
+./cluster.sh status                     # roles of all six nodes
+./cluster.sh leader                     # which coordinator leads, and the standbys
+```
+
+Start the database nodes that already hold data first; a new, empty node then copies everything from the current primary. If a laptop's address cannot be detected, put it in front of the command: `THIS_IP=10.60.14.88 ./cluster.sh etcd up`.
