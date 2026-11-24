@@ -11,10 +11,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
+import psycopg
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from . import config, db
 
@@ -201,7 +204,84 @@ def api_state():
     totals = [b["total"] for b in state["branches"].values()]
     state["total"] = str(sum(Decimal(t) for t in totals)) if all(totals) else None
     state["invariant"] = verdict
+    host = urlparse(config.COORDINATOR_URL).hostname
+    state["coordinator_host"] = None if host == "coordinator" else host
     return state
+
+
+# ---------------------------------------------------------------- demo helpers
+@app.get("/api/replication")
+def api_replication(account: str = "A-1001"):
+    """Replication demo: read one account directly from EVERY node of its branch."""
+    account = account.upper()
+    branch = config.branch_of(account)
+
+    def read_node(node):
+        host, pg_port, _ = config.node_endpoint(node)
+        out = {"name": node, "host": host if host != node else None}
+        try:
+            with psycopg.connect(
+                    f"host={host} port={pg_port} dbname={config.BANK_DB} user={config.BANK_USER} "
+                    f"password={config.BANK_PASSWORD} connect_timeout=2", autocommit=True) as c:
+                row = c.execute("SELECT balance, pg_is_in_recovery() FROM accounts WHERE id = %s",
+                                (account,)).fetchone()
+            out["balance"] = str(row[0]) if row else None
+            out["role"] = "replica" if row and row[1] else "primary"
+        except Exception as e:
+            out["error"] = type(e).__name__
+        return out
+
+    return {"account": account, "nodes": list(probe_pool.map(read_node, config.BRANCHES[branch]["nodes"]))}
+
+
+class LoadTest(BaseModel):
+    branch: str = "A"
+    reads: int = 30
+    writes: int = 5
+
+
+@app.post("/api/loadtest")
+def api_loadtest(req: LoadTest):
+    """Load-balancing demo: send reads and writes through HAProxy, then report
+    how many connections each node received (from HAProxy's own counters)."""
+    b = req.branch.upper()
+    cfg = config.BRANCHES[b]
+    before = safe(haproxy_view, default={})
+    reads_ok = 0
+    for _ in range(max(0, min(req.reads, 100))):
+        try:
+            with db.connect_read(b) as c:
+                c.execute("SELECT count(*) FROM accounts").fetchone()
+            reads_ok += 1
+        except Exception:
+            pass
+    writes_ok = 0
+    for _ in range(max(0, min(req.writes, 20))):          # ₹1 vault -> customer: total unchanged
+        try:
+            r = httpx.post(f"{config.COORDINATOR_URL}/deposit",
+                           json={"account": f"{b}-1010", "amount": "1"}, timeout=10)
+            writes_ok += r.status_code == 200
+        except Exception:
+            pass
+    after = safe(haproxy_view, default={})
+
+    def delta(proxy, node):
+        get = lambda v: v.get(proxy, {}).get(node, {}).get("sessions", 0)
+        return max(0, get(after) - get(before))
+
+    return {"branch": b, "reads_ok": reads_ok, "writes_ok": writes_ok,
+            "nodes": [{"name": n, "reads": delta(cfg["haproxy_read"], n),
+                       "writes": delta(cfg["haproxy_write"], n)} for n in cfg["nodes"]]}
+
+
+@app.get("/api/account/{account_id}")
+def api_account(account_id: str):
+    """Availability demo: a customer's balance read, through the coordinator API."""
+    try:
+        r = httpx.get(f"{config.COORDINATOR_URL}/accounts/{account_id}", timeout=5)
+        return JSONResponse(r.json(), status_code=r.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": f"coordinator unreachable ({type(e).__name__})"}, status_code=502)
 
 
 async def forward(path: str, request: Request):
@@ -225,6 +305,11 @@ async def api_transfer(request: Request):
 @app.post("/api/recover")
 async def api_recover(request: Request):
     return await forward("/recover", request)
+
+
+@app.post("/api/deposit")
+async def api_deposit(request: Request):
+    return await forward("/deposit", request)
 
 
 @app.get("/", response_class=HTMLResponse)

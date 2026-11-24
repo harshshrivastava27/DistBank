@@ -6,219 +6,208 @@
 <title>Distributed Bank</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><path d='M8 13l8-5 8 5M9 14v8m5-8v8m4-8v8m5-8v8M7 24h18' stroke='white' stroke-width='2' fill='none' stroke-linecap='round'/></svg>">
 <style>
-  /* ---------- design tokens ---------- */
   :root {
-    --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f9fafb; --ink: #0f172a; --ink-2: #334155;
+    --bg: #f5f6f8; --surface: #ffffff; --surface-2: #f8fafc; --ink: #0f172a; --ink-2: #334155;
     --muted: #64748b; --line: #e5e7eb; --line-2: #eef0f3;
-    --accent: #4f46e5; --accent-soft: #eef2ff; --accent-ink: #3730a3;
+    --accent: #4f46e5; --accent-soft: #eef2ff;
     --ok: #059669; --ok-soft: #ecfdf5; --ok-line: #a7f3d0;
     --warn: #d97706; --warn-soft: #fffbeb; --warn-line: #fde68a;
     --bad: #dc2626; --bad-soft: #fef2f2; --bad-line: #fecaca;
     --violet: #7c3aed; --violet-soft: #f5f3ff;
+    --code-bg: #0f172a; --code-ink: #e2e8f0;
     --shadow: 0 1px 2px rgba(15,23,42,.04), 0 4px 16px rgba(15,23,42,.04);
-    --radius: 16px;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #0b0f17; --surface: #121826; --surface-2: #161d2d; --ink: #e8edf5; --ink-2: #c3cddb;
       --muted: #8a97ab; --line: #232c3d; --line-2: #1c2434;
-      --accent: #818cf8; --accent-soft: #1e1b4b; --accent-ink: #c7d2fe;
+      --accent: #818cf8; --accent-soft: #1e1b4b;
       --ok: #34d399; --ok-soft: #062a20; --ok-line: #065f46;
       --warn: #fbbf24; --warn-soft: #2a1d05; --warn-line: #78350f;
       --bad: #f87171; --bad-soft: #2c0b0b; --bad-line: #7f1d1d;
       --violet: #a78bfa; --violet-soft: #1f1537;
-      --shadow: 0 1px 2px rgba(0,0,0,.3);
+      --code-bg: #05070c; --shadow: 0 1px 2px rgba(0,0,0,.3);
     }
   }
   :root[data-theme="dark"] {
     --bg: #0b0f17; --surface: #121826; --surface-2: #161d2d; --ink: #e8edf5; --ink-2: #c3cddb;
     --muted: #8a97ab; --line: #232c3d; --line-2: #1c2434;
-    --accent: #818cf8; --accent-soft: #1e1b4b; --accent-ink: #c7d2fe;
+    --accent: #818cf8; --accent-soft: #1e1b4b;
     --ok: #34d399; --ok-soft: #062a20; --ok-line: #065f46;
     --warn: #fbbf24; --warn-soft: #2a1d05; --warn-line: #78350f;
     --bad: #f87171; --bad-soft: #2c0b0b; --bad-line: #7f1d1d;
     --violet: #a78bfa; --violet-soft: #1f1537;
-    --shadow: 0 1px 2px rgba(0,0,0,.3);
+    --code-bg: #05070c; --shadow: 0 1px 2px rgba(0,0,0,.3);
   }
 
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, system-ui, sans-serif;
-         -webkit-font-smoothing: antialiased; }
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
   .num { font-variant-numeric: tabular-nums; }
   .mono { font-family: var(--mono); font-size: .92em; }
+  b { font-weight: 650; }
 
-  /* ---------- top bar ---------- */
-  .topbar { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--surface) 85%, transparent);
-            backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
-  .topbar-in { max-width: 1320px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+  /* top bar */
+  .topbar { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+  .topbar-in { max-width: 1320px; margin: 0 auto; padding: 10px 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
   .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; }
   .spacer { flex: 1; }
-  .chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px;
-          font-size: 13px; font-weight: 600; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); white-space: nowrap; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
-  .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
-  .dot.warn { background: var(--warn); }
-  .dot.bad { background: var(--bad); }
+  .chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 600;
+          border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); white-space: nowrap; }
+  .chip.on { border-color: var(--ok-line); background: var(--ok-soft); color: var(--ok); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; display: inline-block; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
   .dot.live { animation: pulse 2s infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
-  .toplink { color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500; padding: 5px 8px; border-radius: 8px; }
-  .toplink:hover { color: var(--ink); background: var(--surface-2); }
+  .iconbtn { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink-2); cursor: pointer; font: inherit; }
 
-  main { max-width: 1320px; margin: 0 auto; padding: 24px 24px 48px; display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
-
-  /* ---------- cards ---------- */
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 22px; min-width: 0; }
-  .card-h { display: flex; align-items: baseline; gap: 10px; margin: 0 0 16px; flex-wrap: wrap; }
-  .card-h h2 { font-size: 16px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+  main { max-width: 1320px; margin: 0 auto; padding: 20px 24px 48px; display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 18px 20px; min-width: 0; }
+  .card-h { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; flex-wrap: wrap; }
+  .card-h h2 { font-size: 16px; font-weight: 650; margin: 0; }
   .card-h .sub { color: var(--muted); font-size: 13.5px; }
   .card-h .right { margin-left: auto; }
 
-  /* ---------- hero (the invariant) ---------- */
-  .hero { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; }
-  .total { position: relative; overflow: hidden; border-radius: var(--radius); padding: 24px 26px; border: 1px solid var(--line);
-           background: var(--surface); box-shadow: var(--shadow); transition: background .4s, border-color .4s; }
-  .total.ok   { background: var(--ok-soft);   border-color: var(--ok-line); }
+  /* status row */
+  .status { display: grid; grid-template-columns: 1.6fr repeat(3, 1fr); gap: 14px; }
+  .total { border-radius: 16px; padding: 16px 20px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); transition: background .4s, border-color .4s; }
+  .total.ok { background: var(--ok-soft); border-color: var(--ok-line); }
   .total.warn { background: var(--warn-soft); border-color: var(--warn-line); }
-  .total.bad  { background: var(--bad-soft);  border-color: var(--bad-line); }
-  .total .label { color: var(--ink-2); font-size: 14px; font-weight: 500; }
-  .total .amount { font-size: clamp(34px, 5vw, 52px); font-weight: 750; letter-spacing: -.03em; line-height: 1.1; margin: 6px 0 14px; }
-  .verdict { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14.5px; padding: 6px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
-  .total.ok .verdict { color: var(--ok); border-color: var(--ok-line); }
-  .total.warn .verdict { color: var(--warn); border-color: var(--warn-line); }
-  .total.bad .verdict { color: var(--bad); border-color: var(--bad-line); }
-  .total .expected { color: var(--muted); font-size: 13.5px; margin-top: 12px; }
-
-  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .total.bad { background: var(--bad-soft); border-color: var(--bad-line); }
+  .total .k { color: var(--ink-2); font-size: 13.5px; font-weight: 500; }
+  .total .amount { font-size: 34px; font-weight: 750; letter-spacing: -.02em; line-height: 1.15; }
+  .total .verdict { font-size: 13.5px; font-weight: 650; margin-top: 2px; }
+  .total.ok .verdict { color: var(--ok); } .total.warn .verdict { color: var(--warn); } .total.bad .verdict { color: var(--bad); }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow); }
   .stat .k { color: var(--muted); font-size: 13px; font-weight: 500; }
-  .stat .v { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin-top: 2px; }
-  .stat .v small { font-size: 15px; color: var(--muted); font-weight: 600; }
+  .stat .v { font-size: 26px; font-weight: 700; margin-top: 2px; }
+  .stat .v small { font-size: 14px; color: var(--muted); font-weight: 600; }
   .stat.alert { border-color: var(--warn-line); background: var(--warn-soft); }
+  .stat.badbox { border-color: var(--bad-line); background: var(--bad-soft); }
 
-  /* ---------- branches / nodes ---------- */
-  .branches { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
-  .nodes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .node { border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: var(--surface-2); transition: all .3s; min-width: 0; }
-  .node .top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  /* cluster */
+  .branches { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .nodes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .node { border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; background: var(--surface-2); transition: all .3s; min-width: 0; }
   .node .name { font-family: var(--mono); font-weight: 650; font-size: 14px; }
-  .node .host { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .node .role { margin-top: 10px; }
-  .node .meta { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
-  .node.primary { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft);
-                  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
+  .node .host { color: var(--muted); font-size: 12px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .node .role { margin-top: 8px; }
+  .node .meta { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+  .node.primary { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
   .node.down { border-color: var(--bad-line); background: var(--bad-soft); }
   .node.down .name { color: var(--bad); }
-
-  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
   .badge.primary { background: var(--accent); color: #fff; }
   .badge.sync { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok-line); }
   .badge.replica { background: var(--surface); color: var(--ink-2); border: 1px solid var(--line); }
   .badge.down { background: var(--bad); color: #fff; }
   .badge.other { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-line); }
 
-  .indoubt { margin-top: 14px; border: 1px solid var(--warn-line); background: var(--warn-soft); color: var(--ink); border-radius: 12px; padding: 10px 13px; font-size: 13.5px; }
-  .indoubt b { color: var(--warn); }
-  .notice { margin-top: 14px; color: var(--muted); font-size: 13px; }
+  /* demo guide */
+  .demo { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+  .tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 18px; }
+  .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 58px; padding: 6px 4px; border: 0; border-radius: 10px; background: transparent;
+         color: var(--ink-2); font: inherit; font-weight: 600; font-size: 13px; line-height: 1.2; text-align: center; cursor: pointer; }
+  .tab .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--line); color: var(--ink-2); }
+  .tab:hover { background: var(--surface); }
+  .tab.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(15,23,42,.1); }
+  .tab.active .n { background: var(--accent); color: #fff; }
+  .panel { display: none; }
+  .panel.active { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; }
+  .idea { font-size: 15.5px; color: var(--ink); margin: 0 0 14px; padding: 12px 14px; background: var(--accent-soft); border-radius: 12px; border-left: 4px solid var(--accent); }
+  .guide { list-style: none; padding: 0; margin: 0; counter-reset: s; display: grid; gap: 14px; }
+  .guide > li { counter-increment: s; position: relative; padding-left: 36px; font-size: 14.5px; color: var(--ink-2); }
+  .guide > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); color: var(--surface);
+                        font-size: 12.5px; font-weight: 700; display: grid; place-items: center; }
+  .guide .ctrl { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .look { font-size: 13.5px; color: var(--muted); margin-top: 4px; }
+  .proof { border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--surface-2); min-width: 0; }
+  .proof h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+  .verdict-line { margin-top: 12px; font-weight: 650; font-size: 14.5px; }
+  .verdict-line.ok { color: var(--ok); } .verdict-line.warn { color: var(--warn); } .verdict-line.bad { color: var(--bad); }
 
-  /* ---------- accounts ---------- */
-  details.accounts { margin-top: 14px; border-top: 1px solid var(--line-2); padding-top: 10px; }
-  details.accounts summary { cursor: pointer; color: var(--ink-2); font-size: 13.5px; font-weight: 600; list-style: none; display: flex; align-items: center; gap: 6px; }
-  details.accounts summary::-webkit-details-marker { display: none; }
-  details.accounts summary::before { content: "▸"; color: var(--muted); transition: transform .2s; }
-  details.accounts[open] summary::before { transform: rotate(90deg); }
-  .acct-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; margin-top: 8px; }
-  .acct { display: flex; justify-content: space-between; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line-2); font-size: 13.5px; }
-  .acct .who { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .acct .who .mono { color: var(--muted); margin-right: 6px; }
-  .acct.vault { grid-column: 1 / -1; font-weight: 600; }
-  .flash { animation: flash 1.4s ease-out; border-radius: 6px; }
-  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
-
-  /* ---------- transfer + log ---------- */
-  .work { display: grid; grid-template-columns: 1fr 1.1fr; gap: 20px; align-items: start; }
-  form { display: grid; gap: 14px; }
-  .row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: end; }
-  label { display: block; font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; }
-  select, input { width: 100%; height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit;
-                  background: var(--surface); color: var(--ink); outline: none; transition: border-color .15s, box-shadow .15s; }
-  select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
-  .swap { height: 42px; width: 42px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); cursor: pointer; font-size: 17px; }
-  .swap:hover { background: var(--surface-2); }
-  .amount-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .amount-row input { flex: 1; min-width: 120px; }
-  .quick { height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
-  .quick:hover { border-color: var(--accent); color: var(--accent); }
-  .kind { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13.5px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); }
-  .kind b { color: var(--ink); }
-  .kind .tag { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 6px; letter-spacing: .02em; }
-  .kind .tag.tpc { background: var(--violet-soft); color: var(--violet); }
-  .kind .tag.local { background: var(--ok-soft); color: var(--ok); }
-  details.fault summary { cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--muted); list-style: none; }
-  details.fault summary::-webkit-details-marker { display: none; }
-  details.fault summary:hover { color: var(--ink); }
-  details.fault[open] summary { margin-bottom: 8px; color: var(--bad); }
-  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-  button.primary { height: 44px; padding: 0 22px; border: 0; border-radius: 11px; background: var(--accent); color: #fff; font: inherit; font-weight: 650; cursor: pointer; transition: filter .15s, transform .05s; }
-  button.primary:hover { filter: brightness(1.08); }
-  button.primary:active { transform: translateY(1px); }
-  button.primary.danger { background: var(--bad); }
-  button.ghost { height: 44px; padding: 0 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); color: var(--ink-2); font: inherit; font-weight: 600; cursor: pointer; }
-  button.ghost:hover { background: var(--surface-2); }
+  select, input { height: 40px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; font: inherit; background: var(--surface); color: var(--ink); outline: none; }
+  select:focus, input:focus { border-color: var(--accent); }
+  input[type=number] { width: 110px; }
+  button.btn { height: 40px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+  button.btn:hover { filter: brightness(1.08); }
+  button.btn.danger { background: var(--bad); }
+  button.btn.ok { background: var(--ok); }
+  button.btn.ghost { background: var(--surface); color: var(--ink-2); border: 1px solid var(--line); }
   button:disabled { opacity: .55; cursor: default; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { height: 36px; padding: 0 14px; border: 0; background: var(--surface); color: var(--ink-2); font: inherit; font-weight: 600; cursor: pointer; }
+  .seg button.on { background: var(--ink); color: var(--surface); }
+  .cmd { display: flex; align-items: center; gap: 8px; background: var(--code-bg); color: var(--code-ink); border-radius: 10px; padding: 8px 8px 8px 12px; font-family: var(--mono); font-size: 13.5px; margin-top: 8px; }
+  .cmd code { flex: 1; overflow-x: auto; white-space: nowrap; }
+  .cmd button { height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: rgba(255,255,255,.12); color: #fff; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .radio { display: grid; gap: 6px; margin-top: 8px; }
+  .radio label { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; }
+  .radio input { height: auto; margin-top: 3px; }
 
-  /* protocol timeline */
-  .result { margin-top: 18px; border-top: 1px solid var(--line-2); padding-top: 16px; }
-  .result-h { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-weight: 650; font-size: 14.5px; flex-wrap: wrap; }
-  .result .placeholder { color: var(--muted); font-size: 13.5px; }
-  .steps { list-style: none; margin: 0; padding: 0; position: relative; }
-  .steps li { display: grid; grid-template-columns: 16px 56px 1fr; gap: 10px; align-items: start; padding: 5px 0; font-size: 13.5px; position: relative; }
-  .steps li::before { content: ""; position: absolute; left: 7px; top: 20px; bottom: -6px; width: 2px; background: var(--line); }
+  /* proof widgets */
+  table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.t th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  table.t td { padding: 8px 6px; border-bottom: 1px solid var(--line-2); }
+  table.t td.r, table.t th.r { text-align: right; }
+  .flash { animation: flash 1.4s ease-out; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, transparent); } to { background: transparent; } }
+  .bars { display: grid; gap: 12px; }
+  .bar-row .lbl { display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 4px; }
+  .bar { height: 12px; border-radius: 6px; background: var(--line-2); overflow: hidden; display: flex; }
+  .bar span { display: block; height: 100%; transition: width .6s; }
+  .bar .r { background: var(--ok); } .bar .w { background: var(--accent); }
+  .legend { display: flex; gap: 14px; font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .big-status { font-size: 20px; font-weight: 700; margin-bottom: 6px; }
+  .strip-h { display: flex; justify-content: space-between; font-size: 13.5px; font-weight: 600; margin: 4px 0 6px; }
+  .strip { display: grid; grid-template-columns: repeat(40, 1fr); gap: 2px; height: 26px; margin-bottom: 14px; }
+  .strip i { border-radius: 3px; background: var(--line-2); }
+  .strip i.ok { background: var(--ok); } .strip i.bad { background: var(--bad); } .strip i.wait { background: var(--warn); }
+  .steps { list-style: none; margin: 0; padding: 0; }
+  .steps li { display: grid; grid-template-columns: 14px 50px 1fr; gap: 8px; align-items: start; padding: 4px 0; font-size: 13.5px; position: relative; }
+  .steps li::before { content: ""; position: absolute; left: 6px; top: 18px; bottom: -5px; width: 2px; background: var(--line); }
   .steps li:last-child::before { display: none; }
-  .steps .pt { width: 12px; height: 12px; border-radius: 50%; margin: 4px 2px; background: var(--muted); position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--surface); }
-  .steps .ms { color: var(--muted); font-family: var(--mono); font-size: 12px; text-align: right; padding-top: 1px; }
-  .steps .p1 .pt { background: var(--accent); }
-  .steps .dec .pt { background: var(--violet); }
-  .steps .p2 .pt, .steps .done .pt { background: var(--ok); }
-  .steps .err .pt { background: var(--bad); }
+  .steps .pt { width: 12px; height: 12px; border-radius: 50%; margin-top: 4px; background: var(--muted); position: relative; z-index: 1; }
+  .steps .ms { color: var(--muted); font-family: var(--mono); font-size: 11.5px; text-align: right; padding-top: 2px; }
+  .steps .p1 .pt { background: var(--accent); } .steps .dec .pt { background: var(--violet); }
+  .steps .p2 .pt, .steps .done .pt { background: var(--ok); } .steps .err .pt { background: var(--bad); }
   .steps .err .txt { color: var(--bad); }
-  .steps .phase { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 5px; margin-right: 6px; letter-spacing: .02em; }
-  .steps .p1 .phase { background: var(--accent-soft); color: var(--accent); }
-  .steps .p2 .phase { background: var(--ok-soft); color: var(--ok); }
-  .errbox { border: 1px solid var(--bad-line); background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; margin-bottom: 10px; }
-
-  /* transaction list */
-  .txns { display: grid; }
-  .txn { display: grid; grid-template-columns: 64px 1fr auto auto; gap: 12px; align-items: center; padding: 10px 2px; border-bottom: 1px solid var(--line-2); font-size: 13.5px; }
+  .ph { font-size: 10.5px; font-weight: 700; padding: 1px 6px; border-radius: 5px; margin-right: 5px; }
+  .p1 .ph { background: var(--accent-soft); color: var(--accent); } .p2 .ph { background: var(--ok-soft); color: var(--ok); }
+  .state { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .state.ok { background: var(--ok-soft); color: var(--ok); } .state.warn { background: var(--warn-soft); color: var(--warn); }
+  .state.grey { background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
+  .txn { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line-2); font-size: 13.5px; }
   .txn:last-child { border-bottom: 0; }
-  .txn .time { color: var(--muted); font-family: var(--mono); font-size: 12px; }
-  .txn .route { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .txn .route .arrow { color: var(--muted); margin: 0 6px; }
-  .txn .kindtag { font-size: 11px; font-weight: 700; color: var(--muted); margin-left: 8px; }
-  .txn .amt { font-weight: 650; text-align: right; }
-  .state { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; letter-spacing: .02em; }
-  .state.ok { background: var(--ok-soft); color: var(--ok); }
-  .state.warn { background: var(--warn-soft); color: var(--warn); }
-  .state.grey { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
-  .empty { color: var(--muted); font-size: 13.5px; padding: 18px 0; text-align: center; }
+  .txn .route { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .indoubt { border: 1px solid var(--warn-line); background: var(--warn-soft); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; margin-bottom: 10px; }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  .errbox { border: 1px solid var(--bad-line); background: var(--bad-soft); color: var(--bad); border-radius: 10px; padding: 8px 12px; font-size: 13.5px; margin-bottom: 8px; }
 
-  .offline { display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 18px; border-radius: 12px; font-weight: 600; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.2); z-index: 10; }
+  /* events */
+  .events { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 520px; overflow-y: auto; }
+  .events li { display: grid; grid-template-columns: 58px 1fr; gap: 8px; font-size: 13px; padding: 7px 0; border-bottom: 1px solid var(--line-2); }
+  .events .t { color: var(--muted); font-family: var(--mono); font-size: 11.5px; padding-top: 1px; }
+  .events .bad { color: var(--bad); } .events .ok { color: var(--ok); } .events .warn { color: var(--warn); } .events .acc { color: var(--accent); }
 
-  @media (max-width: 1040px) {
-    .hero, .branches, .work { grid-template-columns: minmax(0, 1fr); }
+  .offline { display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 18px; border-radius: 12px; font-weight: 600; z-index: 10; }
+
+  @media (max-width: 1100px) {
+    .demo { grid-template-columns: minmax(0, 1fr); }
+    .status { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .status .total { grid-column: 1 / -1; }
   }
-  @media (max-width: 620px) {
+  @media (max-width: 860px) {
+    .branches, .panel.active { grid-template-columns: minmax(0, 1fr); }
+    .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width: 560px) {
     .topbar-in, main { padding-left: 16px; padding-right: 16px; }
-    .nodes, .acct-grid, .row { grid-template-columns: minmax(0, 1fr); }
-    .stats { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-    .card { padding: 18px 16px; }
-    .card-h .right { margin-left: 0; width: 100%; }
-    .swap { width: 100%; }
-    .txn { grid-template-columns: 1fr auto; }
-    .txn .time, .txn .state { display: none; }
-    .toplink { display: none; }
+    .nodes { grid-template-columns: minmax(0, 1fr); }
+    .total .amount { font-size: 28px; }
   }
 </style>
 </head>
@@ -229,314 +218,560 @@
       <div class="logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6M5 11v8M10 11v8M14 11v8M19 11v8M3 21h18"/></svg></div>
       Distributed Bank
     </div>
-    <span class="chip" id="coord"><span class="dot"></span><span>Coordinator</span></span>
-    <span class="chip"><span class="dot ok live" id="livedot"></span><span id="updated">Live</span></span>
+    <span class="chip" id="coord"><span class="dot"></span>Coordinator</span>
+    <span class="chip on" id="traffic-chip" style="display:none"><span class="dot ok live"></span>Customer traffic running</span>
     <span class="spacer"></span>
-    <a class="toplink" id="lnk-haproxy" target="_blank" rel="noopener">HAProxy stats ↗</a>
-    <a class="toplink" id="lnk-api" target="_blank" rel="noopener">API docs ↗</a>
-    <button class="ghost" id="theme" type="button" title="Toggle light / dark" style="height:34px;padding:0 10px">◐</button>
+    <span class="chip"><span class="dot ok live" id="livedot"></span><span id="updated">Live</span></span>
+    <button class="iconbtn" id="theme" type="button" title="Light / dark">◐</button>
   </div>
 </header>
 
 <main>
-  <!-- 1. The one number that must never change -->
-  <section class="hero">
+  <!-- STATUS: the one rule that must always hold -->
+  <section class="status">
     <div class="total" id="total-card">
-      <div class="label">Total money in the bank</div>
+      <div class="k">Total money in the bank — must always be <b id="expected">₹22,00,000.00</b></div>
       <div class="amount num" id="total">—</div>
       <div class="verdict" id="verdict">Connecting…</div>
-      <div class="expected">Must always equal <b class="num" id="expected">—</b>, whatever fails.</div>
     </div>
-    <div class="stats">
-      <div class="stat"><div class="k">Nodes online</div><div class="v num" id="s-nodes">—</div></div>
-      <div class="stat"><div class="k">Committed</div><div class="v num" id="s-committed">—</div></div>
-      <div class="stat"><div class="k">Aborted</div><div class="v num" id="s-aborted">—</div></div>
-      <div class="stat" id="s-doubt-card"><div class="k">In doubt</div><div class="v num" id="s-doubt">—</div></div>
-    </div>
+    <div class="stat"><div class="k">Database nodes online</div><div class="v num" id="s-nodes">—</div></div>
+    <div class="stat" id="s-doubt-card"><div class="k">Transfers in doubt</div><div class="v num" id="s-doubt">—</div></div>
+    <div class="stat"><div class="k">Transfers committed</div><div class="v num" id="s-committed">—</div></div>
   </section>
 
-  <!-- 2. The two database clusters -->
+  <!-- CLUSTER: who is where -->
   <section class="branches" id="branches"></section>
 
-  <!-- 3. Try it -->
-  <section class="work">
+  <!-- DEMO GUIDE -->
+  <section class="demo">
     <div class="card">
-      <div class="card-h"><h2>Send money</h2><span class="sub">Watch the protocol run step by step</span></div>
-      <form id="tform">
-        <div class="row">
-          <div><label for="from">From</label><select id="from"></select></div>
-          <button class="swap" id="swap" type="button" title="Swap">⇄</button>
-          <div><label for="to">To</label><select id="to"></select></div>
-        </div>
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="rep"><span class="n">1</span>Replication</button>
+        <button class="tab" data-tab="lb"><span class="n">2</span>Load balancing</button>
+        <button class="tab" data-tab="tx"><span class="n">3</span>Distributed transaction</button>
+        <button class="tab" data-tab="ft"><span class="n">4</span>Fault tolerance</button>
+        <button class="tab" data-tab="av"><span class="n">5</span>Availability</button>
+        <button class="tab" data-tab="rc"><span class="n">6</span>Recovery</button>
+      </nav>
+
+      <!-- 1. REPLICATION -->
+      <div class="panel active" data-panel="rep">
         <div>
-          <label for="amount">Amount (₹)</label>
-          <div class="amount-row">
-            <input id="amount" type="number" min="1" step="0.01" value="500">
-            <button class="quick" type="button" data-amt="100">₹100</button>
-            <button class="quick" type="button" data-amt="500">₹500</button>
-            <button class="quick" type="button" data-amt="2000">₹2,000</button>
-          </div>
+          <p class="idea">Each branch keeps <b>3 copies</b> of its data on <b>3 different laptops</b>. A write goes to the <b>primary</b>, which copies it to the <b>replicas</b> immediately.</p>
+          <ol class="guide">
+            <li>Pick an account.
+              <div class="ctrl"><select id="rep-acct"></select></div></li>
+            <li>Deposit money into it. The write goes only to the primary.
+              <div class="ctrl"><button class="btn" id="rep-go">Deposit ₹100</button></div></li>
+            <li>Point at the table: the <b>same new balance</b> appears on all 3 nodes, each on a different laptop.</li>
+          </ol>
         </div>
-        <div class="kind" id="kind"></div>
-        <details class="fault" id="fault-box">
-          <summary>⚡ Simulate a coordinator crash</summary>
-          <select id="fault">
-            <option value="">No crash: normal transfer</option>
-            <option value="crash_before_decision">Crash after PREPARE, before deciding → recovery rolls back</option>
-            <option value="crash_after_decision">Crash after logging COMMIT → recovery commits</option>
-            <option value="crash_mid_commit">Crash after committing one branch → recovery finishes</option>
-          </select>
-        </details>
-        <div class="actions">
-          <button class="primary" id="send" type="submit">Send transfer</button>
-          <button class="ghost" id="recover" type="button" title="Recovery also runs automatically every 2 s">Run recovery</button>
+        <div class="proof">
+          <h3>Balance stored on each node</h3>
+          <div id="rep-out" class="muted">Loading…</div>
         </div>
-      </form>
-      <div class="result" id="result"><div class="placeholder">The steps of your transfer will appear here.</div></div>
+      </div>
+
+      <!-- 2. LOAD BALANCING -->
+      <div class="panel" data-panel="lb">
+        <div>
+          <p class="idea"><b>HAProxy</b> sits in front of the databases. It sends every <b>write to the primary</b> and spreads <b>reads across the replicas</b>, so no single node does all the work.</p>
+          <ol class="guide">
+            <li>Choose a branch.
+              <div class="ctrl"><div class="seg" id="lb-branch"><button class="on" data-b="A">Branch A</button><button data-b="B">Branch B</button></div></div></li>
+            <li>Send a burst of traffic through HAProxy.
+              <div class="ctrl"><button class="btn" id="lb-go">Send 30 reads + 5 writes</button></div></li>
+            <li>Point at the bars: <b>reads are split between the replicas</b>, <b>writes all land on the primary</b>.</li>
+          </ol>
+          <p class="look">Numbers come from HAProxy's own counters. The dashboard's background refresh adds a few extra connections.</p>
+        </div>
+        <div class="proof">
+          <h3>Connections each node received</h3>
+          <div id="lb-out" class="muted">Click the button to run the test.</div>
+        </div>
+      </div>
+
+      <!-- 3. DISTRIBUTED TRANSACTION -->
+      <div class="panel" data-panel="tx">
+        <div>
+          <p class="idea">Accounts are split by branch: <b>A-…</b> lives on Branch A, <b>B-…</b> on Branch B. A transfer between branches uses <b>two-phase commit</b>: both branches first say “ready” (PREPARE), the coordinator records COMMIT, then both commit. Either both happen or neither.</p>
+          <ol class="guide">
+            <li>Choose a cross-branch transfer.
+              <div class="ctrl"><select id="tx-from"></select> → <select id="tx-to"></select>
+                <input id="tx-amt" type="number" min="1" step="1" value="500"></div></li>
+            <li>Send it.
+              <div class="ctrl"><button class="btn" id="tx-go">Send transfer</button></div></li>
+            <li>Walk through the steps on the right: <b>Phase 1</b> PREPARE on both branches → <b>decision</b> logged → <b>Phase 2</b> COMMIT on both. The total at the top is unchanged.</li>
+          </ol>
+        </div>
+        <div class="proof">
+          <h3>What the coordinator did</h3>
+          <div id="tx-out" class="muted">The protocol steps appear here.</div>
+          <h3 style="margin-top:18px">Recent transfers</h3>
+          <div id="tx-list" class="muted">—</div>
+        </div>
+      </div>
+
+      <!-- 4. FAULT TOLERANCE -->
+      <div class="panel" data-panel="ft">
+        <div>
+          <p class="idea">If a branch's <b>primary crashes</b>, Patroni notices (via etcd) and <b>automatically promotes a replica</b> to primary. Nobody has to step in.</p>
+          <ol class="guide">
+            <li>Choose a branch.
+              <div class="ctrl"><div class="seg" id="ft-branch"><button class="on" data-b="A">Branch A</button><button data-b="B">Branch B</button></div></div></li>
+            <li><span id="ft-who">…</span>
+              <div class="cmd"><code id="ft-kill">docker kill …</code><button data-copy="ft-kill">Copy</button></div>
+              <div class="look">…or simply turn off that laptop's Wi-Fi.</div></li>
+            <li>Watch the right side and the cluster cards above: the old primary turns <b>red</b>, and within about 20 seconds <b>another node becomes primary</b>.</li>
+            <li>Bring the old node back. It rejoins as a <b>replica</b> and catches up on its own:
+              <div class="cmd"><code id="ft-start">docker start …</code><button data-copy="ft-start">Copy</button></div></li>
+          </ol>
+        </div>
+        <div class="proof">
+          <h3>Failover status</h3>
+          <div id="ft-out"></div>
+        </div>
+      </div>
+
+      <!-- 5. AVAILABILITY -->
+      <div class="panel" data-panel="av">
+        <div>
+          <p class="idea">Customers never connect to a database directly. They go through the coordinator and HAProxy, so <b>the bank keeps serving while nodes fail</b>.</p>
+          <ol class="guide">
+            <li>Start simulated customers: one balance check and one small transfer every second.
+              <div class="ctrl"><button class="btn ok" id="av-go">▶ Start customer traffic</button></div></li>
+            <li>Now kill a primary (tab <b>4</b>). Traffic keeps running while you switch tabs.</li>
+            <li>Point at the strips: <b>reads stay green</b> (replicas keep answering). <b>Writes pause a few seconds</b> during the election, then turn green again.</li>
+          </ol>
+        </div>
+        <div class="proof">
+          <h3>Customer requests (newest on the right)</h3>
+          <div class="strip-h"><span>Balance checks (reads)</span><span class="num" id="av-r-n">0 ok · 0 failed</span></div>
+          <div class="strip" id="av-r"></div>
+          <div class="strip-h"><span>Transfers (writes)</span><span class="num" id="av-w-n">0 ok · 0 failed</span></div>
+          <div class="strip" id="av-w"></div>
+          <div id="av-verdict" class="verdict-line"></div>
+        </div>
+      </div>
+
+      <!-- 6. RECOVERY -->
+      <div class="panel" data-panel="rc">
+        <div>
+          <p class="idea">The coordinator writes every decision to a <b>durable log</b> before acting. If it crashes halfway through a transfer, on restart it reads the log and <b>finishes or undoes</b> the transfer, so money is never lost.</p>
+          <ol class="guide">
+            <li>Choose where the coordinator should crash:
+              <div class="radio" id="rc-fault">
+                <label><input type="radio" name="rcf" value="crash_before_decision" checked><span><b>Before deciding</b> → recovery must <b>roll back</b></span></label>
+                <label><input type="radio" name="rcf" value="crash_after_decision"><span><b>After logging COMMIT</b> → recovery must <b>commit</b></span></label>
+                <label><input type="radio" name="rcf" value="crash_mid_commit"><span><b>Halfway through committing</b> → recovery must <b>finish</b></span></label>
+              </div></li>
+            <li>Send ₹500 from A-1001 to B-1001 and crash.
+              <div class="ctrl"><button class="btn danger" id="rc-go">Send &amp; crash coordinator</button></div>
+              <div class="look">The coordinator turns red, and a transfer is stuck <b>“in doubt”</b> with its rows locked.</div></li>
+            <li>Restart the coordinator<span id="rc-where"></span>:
+              <div class="cmd"><code id="rc-start">docker start coordinator</code><button data-copy="rc-start">Copy</button></div></li>
+            <li>Watch it read its log and resolve the transfer: <b>in doubt goes back to 0</b> and the total returns to <b>₹22,00,000</b>.</li>
+          </ol>
+        </div>
+        <div class="proof">
+          <h3>Recovery status</h3>
+          <div id="rc-out"></div>
+        </div>
+      </div>
     </div>
 
-    <div class="card">
-      <div class="card-h"><h2>Recent transactions</h2><span class="sub">from the coordinator's durable log</span></div>
-      <div class="txns" id="txns"><div class="empty">Loading…</div></div>
-    </div>
+    <aside class="card">
+      <div class="card-h"><h2>Live events</h2><span class="sub">what just changed</span></div>
+      <ul class="events" id="events"><li><span class="t"></span><span class="muted">Watching the cluster…</span></li></ul>
+    </aside>
   </section>
 </main>
 
-<div class="offline" id="stale">Dashboard can't reach the server — retrying…</div>
+<div class="offline" id="stale">Dashboard can't reach its server — retrying…</div>
 
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const money = v => v == null ? "—" : "₹" + Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const clock = t => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour12: false }); };
-const host = location.hostname;
-$("lnk-haproxy").href = `http://${host}:8404/`;
-$("lnk-api").href = `http://${host}:8000/docs`;
+const clock = t => { const d = t ? new Date(t) : new Date(); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour12: false }); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+  let d = {}; try { d = await r.json(); } catch (e) {}
+  return [r.status, d];
+}
 
-/* theme toggle (remembered per browser) */
+/* theme */
 try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
 $("theme").onclick = () => {
-  const dark = document.documentElement.dataset.theme
-    ? document.documentElement.dataset.theme === "dark"
-    : matchMedia("(prefers-color-scheme: dark)").matches;
-  const next = dark ? "light" : "dark";
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem("theme", next); } catch (e) {}
 };
 
-const lastBalance = {};
-const openAccounts = {};
-let accountsLoaded = false;
+/* copy buttons (works on plain http too) */
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-copy]"); if (!b) return;
+  const text = $(b.dataset.copy).textContent;
+  const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); } catch (err) {}
+  ta.remove();
+});
 
-const ROLE = {
-  "primary":      ["primary", "★ Primary"],
-  "sync replica": ["sync",    "Sync replica"],
-  "replica":      ["replica", "Replica"],
-  "down":         ["down",    "Down"],
-};
-const STATE = { COMMITTED: "ok", ABORTED: "grey", STARTED: "warn", COMMITTING: "warn", ABORTING: "warn" };
-
-function nodeMeta(n) {
-  if (n.role === "primary") return "Accepts writes";
-  if (n.role === "down") return "Not responding";
-  if (n.lag_bytes == null) return "Catching up…";
-  return n.lag_bytes === 0 ? "In sync · lag 0" : `Lag ${n.lag_bytes.toLocaleString()} B`;
+/* tabs */
+let activeTab = "rep";
+try { activeTab = localStorage.getItem("tab") || "rep"; } catch (e) {}
+const TABS = ["rep", "lb", "tx", "ft", "av", "rc"];
+if (TABS.includes(location.hash.slice(1))) activeTab = location.hash.slice(1);     // e.g. /#ft
+function showTab(t) {
+  activeTab = t;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.dataset.panel === t));
+  try { localStorage.setItem("tab", t); } catch (e) {}
+  if (t === "rep") refreshReplication();
+}
+document.querySelectorAll(".tab").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+function segment(id, onChange) {
+  const el = $(id); let val = "A";
+  el.querySelectorAll("button").forEach(b => b.onclick = () => {
+    el.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); val = b.dataset.b; onChange && onChange(val);
+  });
+  return () => val;
 }
 
-function renderBranch(key, b) {
+/* ---------------- live state ---------------- */
+let S = null;                 // latest /api/state
+const ROLE = { "primary": ["primary", "★ Primary"], "sync replica": ["sync", "Sync replica"], "replica": ["replica", "Replica"], "down": ["down", "Down"] };
+const STATE = { COMMITTED: "ok", ABORTED: "grey", STARTED: "warn", COMMITTING: "warn", ABORTING: "warn" };
+const laptop = h => h ? `laptop ${h}` : "this computer";
+
+function renderBranch(b) {
+  const up = b.nodes.filter(n => n.role !== "down").length;
   const nodes = b.nodes.map(n => {
     const [cls, text] = ROLE[n.role] || ["other", n.role];
-    const kind = n.role === "primary" ? "primary" : n.role === "down" ? "down" : "";
-    const traffic = n.role === "down" || (n.writes == null && n.reads == null) ? "" :
-      `<div class="meta num">${n.writes ?? 0} writes · ${n.reads ?? 0} reads</div>`;
-    return `<div class="node ${kind}">
-      <div class="top"><span class="name">${esc(n.name)}</span></div>
-      ${n.host ? `<div class="host" title="Runs on ${esc(n.host)}">${esc(n.host)}</div>` : ""}
+    const meta = n.role === "primary" ? "Takes all writes"
+      : n.role === "down" ? "Not responding"
+      : n.lag_bytes == null ? "Catching up…" : n.lag_bytes === 0 ? "Fully up to date" : `Behind by ${n.lag_bytes.toLocaleString()} bytes`;
+    return `<div class="node ${n.role === "primary" ? "primary" : n.role === "down" ? "down" : ""}">
+      <div class="name">${esc(n.name)}</div>
+      <div class="host">${esc(n.host ? "on " + n.host : "")}</div>
       <div class="role"><span class="badge ${cls}">${esc(text)}</span></div>
-      <div class="meta">${esc(nodeMeta(n))}</div>${traffic}</div>`;
+      <div class="meta">${esc(meta)}</div></div>`;
   }).join("");
-
-  let prepared = "";
-  if (b.prepared == null) prepared = `<div class="notice">No primary reachable right now — failover in progress?</div>`;
-  else if (b.prepared.length) prepared = `<div class="indoubt"><b>${b.prepared.length} transaction(s) prepared, waiting for the coordinator's decision</b> (rows locked):<br>` +
-    b.prepared.map(p => `<span class="mono">${esc(p.gid)}</span> since ${esc(clock(p.since))}`).join("<br>") + `</div>`;
-
-  let accounts = "";
-  if (b.accounts) {
-    const rows = b.accounts.map(a => {
-      const changed = lastBalance[a.id] !== undefined && lastBalance[a.id] !== a.balance;
-      lastBalance[a.id] = a.balance;
-      const vault = a.id.endsWith("VAULT");
-      return `<div class="acct ${vault ? "vault" : ""}"><span class="who"><span class="mono">${esc(a.id)}</span>${esc(a.owner)}</span>
-        <span class="num ${changed ? "flash" : ""}">${money(a.balance)}</span></div>`;
-    });
-    const vaultRow = rows.find((_, i) => b.accounts[i].id.endsWith("VAULT")) || "";
-    const custRows = rows.filter((_, i) => !b.accounts[i].id.endsWith("VAULT")).join("");
-    accounts = `<details class="accounts" data-branch="${esc(key)}" ${openAccounts[key] ? "open" : ""}>
-      <summary>Accounts (${b.accounts.length}) · read from a replica</summary>
-      <div class="acct-grid">${vaultRow}${custRows}</div></details>`;
-  } else {
-    accounts = `<div class="notice">No node available to read accounts from.</div>`;
-  }
-
-  const up = b.nodes.filter(n => n.role !== "down").length;
-  return `<div class="card">
-    <div class="card-h"><h2>${esc(b.name)}</h2><span class="sub">${up}/${b.nodes.length} nodes up</span>
-      <span class="sub right num">Branch total <b style="color:var(--ink)">${money(b.total)}</b></span></div>
-    <div class="nodes">${nodes}</div>${prepared}${accounts}</div>`;
+  return `<div class="card"><div class="card-h"><h2>${esc(b.name)}</h2><span class="sub">${up} of ${b.nodes.length} nodes up</span>
+    <span class="sub right num">holds ${money(b.total)}</span></div><div class="nodes">${nodes}</div></div>`;
 }
 
 function render(s) {
-  // coordinator chip
   const cs = s.coordinator;
-  $("coord").innerHTML = `<span class="dot ${cs === "ok" ? "ok" : cs === "starting" ? "warn" : "bad"}"></span><span>Coordinator: ${cs === "ok" ? "running" : esc(cs)}</span>`;
+  $("coord").innerHTML = `<span class="dot ${cs === "ok" ? "ok" : cs === "starting" ? "warn" : "bad"}"></span>Coordinator: ${cs === "ok" ? "running" : cs === "starting" ? "starting" : "DOWN"}`;
 
-  // hero
   $("total").textContent = money(s.total);
   $("expected").textContent = money(s.expected_total);
-  const inv = { ok:        ["ok",   "✓ Consistent — no money created or lost"],
-                settling:  ["warn", "⏳ Settling — a transfer is between its two commits"],
-                unknown:   ["warn", "? A branch primary is unreachable (failover in progress)"],
-                violation: ["bad",  "✗ Violation — the total is wrong"] }[s.invariant] || ["warn", "…"];
+  const inv = { ok: ["ok", "✓ Correct — no money created or lost"],
+                settling: ["warn", "⏳ A transfer is half-way; it will settle"],
+                unknown: ["warn", "? A branch has no primary right now (failover in progress)"],
+                violation: ["bad", "✗ Total is wrong"] }[s.invariant] || ["warn", "…"];
   $("total-card").className = "total " + inv[0];
   $("verdict").textContent = inv[1];
 
-  // stats
   const all = Object.values(s.branches).flatMap(b => b.nodes);
   const up = all.filter(n => n.role !== "down").length;
   $("s-nodes").innerHTML = `${up}<small> / ${all.length}</small>`;
-  const k = s.coord ? s.coord.counts : null;
-  $("s-committed").textContent = k ? (k.COMMITTED || 0) : "—";
-  $("s-aborted").textContent = k ? (k.ABORTED || 0) : "—";
   const prepared = Object.values(s.branches).reduce((n, b) => n + (b.prepared ? b.prepared.length : 0), 0);
   const doubt = Math.max(prepared, s.coord ? s.coord.open : 0);
   $("s-doubt").textContent = doubt;
   $("s-doubt-card").className = "stat" + (doubt ? " alert" : "");
+  $("s-committed").textContent = s.coord ? (s.coord.counts.COMMITTED || 0) : "—";
 
-  // branches (remember which account lists are expanded)
-  document.querySelectorAll("details.accounts").forEach(d => openAccounts[d.dataset.branch] = d.open);
-  $("branches").innerHTML = Object.entries(s.branches).map(([key, b]) => renderBranch(key, b)).join("");
+  $("branches").innerHTML = Object.values(s.branches).map(renderBranch).join("");
 
-  // account pickers, once
-  if (!accountsLoaded) {
-    const groups = Object.values(s.branches).map(b => [b.name, (b.accounts || []).filter(a => !a.id.endsWith("VAULT"))]);
-    const ids = groups.flatMap(([, a]) => a.map(x => x.id));
-    if (ids.length) {
-      const opts = groups.filter(([, a]) => a.length).map(([name, a]) =>
-        `<optgroup label="${esc(name)}">${a.map(x => `<option value="${esc(x.id)}">${esc(x.id)} · ${esc(x.owner)}</option>`).join("")}</optgroup>`).join("");
-      $("from").innerHTML = opts; $("to").innerHTML = opts;
-      $("from").value = ids[0];
-      $("to").value = ids.find(id => id[0] !== ids[0][0]) || ids[1];
-      accountsLoaded = ids.length >= 20;
-      updateKind();
+  fillAccountPickers(s);
+  renderTxList(s);
+  renderFailover(s);
+  renderRecovery(s, doubt);
+  detectEvents(s, doubt);
+}
+
+/* ---------------- events + failover timing ---------------- */
+let prev = null;
+const fo = {};                // per branch: { oldPrimary, downAt, newPrimary, took }
+function addEvent(cls, html) {
+  const ul = $("events");
+  if (ul.dataset.started !== "1") { ul.innerHTML = ""; ul.dataset.started = "1"; }
+  ul.insertAdjacentHTML("afterbegin", `<li><span class="t">${clock()}</span><span class="${cls}">${html}</span></li>`);
+  while (ul.children.length > 40) ul.lastChild.remove();
+}
+function detectEvents(s, doubt) {
+  const now = Date.now();
+  for (const [k, b] of Object.entries(s.branches)) {
+    const prim = b.nodes.find(n => n.role === "primary");
+    const f = fo[k] || (fo[k] = {});
+    if (prev) {
+      const pb = prev.branches[k];
+      for (const n of b.nodes) {
+        const p = pb.nodes.find(x => x.name === n.name); if (!p) continue;
+        if (p.role !== "down" && n.role === "down") addEvent("bad", `<b>${esc(n.name)}</b> stopped responding${p.role === "primary" ? " — it was the <b>primary</b> of " + esc(b.name) : ""}`);
+        if (p.role === "down" && n.role !== "down") addEvent("ok", `<b>${esc(n.name)}</b> is back, as ${n.role === "primary" ? "primary" : "a replica"}`);
+      }
+      const pprim = pb.nodes.find(n => n.role === "primary");
+      if (pprim && (!prim || prim.name !== pprim.name) && !f.downAt) { f.downAt = now; f.oldPrimary = pprim.name; f.newPrimary = null; f.took = null; }
+      if (prim && (!pprim || prim.name !== pprim.name)) {
+        const took = f.downAt ? Math.round((now - f.downAt) / 1000) : null;
+        addEvent("acc", `<b>${esc(prim.name)}</b> is the new primary of ${esc(b.name)}${took != null ? ` — failover took <b>${took} s</b>` : ""}`);
+        f.newPrimary = prim.name; f.took = took; f.downAt = null; f.doneAt = now;
+      }
     }
   }
-
-  // transactions
-  if (!s.coord) $("txns").innerHTML = `<div class="empty">Coordinator log database unreachable.</div>`;
-  else if (!s.coord.recent.length) $("txns").innerHTML = `<div class="empty">No transactions yet — send one!</div>`;
-  else $("txns").innerHTML = s.coord.recent.map(t => `
-    <div class="txn" title="${esc(t.note || t.txn_id)}">
-      <span class="time">${esc(clock(t.time))}</span>
-      <span class="route"><span class="mono">${esc(t.from)}</span><span class="arrow">→</span><span class="mono">${esc(t.to)}</span><span class="kindtag">${t.kind === "2pc" ? "2PC" : "LOCAL"}</span></span>
-      <span class="amt num">${money(t.amount)}</span>
-      <span class="state ${STATE[t.state] || "grey"}">${esc(t.state)}</span>
-    </div>`).join("");
+  if (prev) {
+    if (prev.coordinator === "ok" && s.coordinator !== "ok") addEvent("bad", `<b>Coordinator</b> is down`);
+    if (prev.coordinator !== "ok" && s.coordinator === "ok") addEvent("ok", `<b>Coordinator</b> is running again (it ran recovery from its log)`);
+    if (prev._doubt === 0 && doubt > 0) addEvent("warn", `${doubt} transfer(s) <b>in doubt</b>: prepared, waiting for a decision`);
+    if (prev._doubt > 0 && doubt === 0) addEvent("ok", `All in-doubt transfers <b>resolved</b>`);
+    if ((prev.invariant === "unknown" || prev.invariant === "violation") && s.invariant === "ok") addEvent("ok", `Total is back to <b>${money(s.total)}</b>`);
+  }
+  s._doubt = doubt;
+  prev = s;
 }
 
-/* transfer kind hint */
-function updateKind() {
-  const f = $("from").value, t = $("to").value;
-  if (!f || !t) { $("kind").innerHTML = ""; return; }
-  const cross = f[0] !== t[0];
-  $("kind").innerHTML = f === t
-    ? `Pick two different accounts.`
-    : cross
-      ? `<span class="tag tpc">2PC</span><span><b>Cross-branch</b> — runs a two-phase commit across Branch ${esc(f[0])} and Branch ${esc(t[0])}.</span>`
-      : `<span class="tag local">LOCAL</span><span><b>Same branch</b> — a single local transaction on Branch ${esc(f[0])}.</span>`;
-  $("fault-box").style.display = cross ? "" : "none";
-  if (!cross) $("fault").value = "";
-  syncSendButton();
+/* ---------------- 1. replication ---------------- */
+let repBusy = false, lastRep = {};
+async function refreshReplication() {
+  if (repBusy || activeTab !== "rep" || !$("rep-acct").value) return;
+  repBusy = true;
+  try {
+    const r = await fetch("/api/replication?account=" + encodeURIComponent($("rep-acct").value), { cache: "no-store" });
+    const d = await r.json();
+    const vals = d.nodes.filter(n => n.balance != null).map(n => n.balance);
+    const rows = d.nodes.map(n => {
+      const key = d.account + n.name, changed = lastRep[key] !== undefined && lastRep[key] !== n.balance;
+      lastRep[key] = n.balance;
+      const [cls, text] = n.error ? ["down", "Down"] : n.role === "primary" ? ["primary", "★ Primary"] : ["replica", "Replica"];
+      return `<tr><td><b class="mono">${esc(n.name)}</b><div class="muted" style="font-size:12px">${esc(laptop(n.host))}</div></td>
+        <td><span class="badge ${cls}">${text}</span></td>
+        <td class="r num ${changed ? "flash" : ""}" style="font-weight:650;font-size:15px">${n.error ? "—" : money(n.balance)}</td></tr>`;
+    }).join("");
+    const same = vals.length > 1 && vals.every(v => v === vals[0]);
+    $("rep-out").innerHTML = `<table class="t"><tr><th>Node</th><th>Role</th><th class="r">${esc(d.account)} balance</th></tr>${rows}</table>
+      <div class="verdict-line ${same ? "ok" : "warn"}">${same ? `✓ All ${vals.length} copies are identical` : vals.length ? "⏳ Copies differ for a moment — replicas catching up" : "No node reachable"}</div>`;
+  } catch (e) { $("rep-out").innerHTML = `<div class="errbox">Could not read the nodes.</div>`; }
+  repBusy = false;
 }
-function syncSendButton() {
-  const crash = !!$("fault").value;
-  $("send").textContent = crash ? "Send & crash coordinator" : "Send transfer";
-  $("send").classList.toggle("danger", crash);
-}
-$("from").onchange = updateKind;
-$("to").onchange = updateKind;
-$("fault").onchange = syncSendButton;
-$("swap").onclick = () => { const f = $("from").value; $("from").value = $("to").value; $("to").value = f; updateKind(); };
-document.querySelectorAll(".quick").forEach(b => b.onclick = () => { $("amount").value = b.dataset.amt; });
+setInterval(refreshReplication, 1500);
+$("rep-acct").onchange = () => { lastRep = {}; refreshReplication(); };
+$("rep-go").onclick = async () => {
+  $("rep-go").disabled = true;
+  const [st, d] = await post("/api/deposit", { account: $("rep-acct").value, amount: "100" });
+  if (st !== 200) $("rep-out").insertAdjacentHTML("afterbegin", `<div class="errbox">Deposit failed: ${esc(typeof d.detail === "string" ? d.detail : "error " + st)}</div>`);
+  else addEvent("acc", `Deposited ₹100 into <b>${esc($("rep-acct").value)}</b> (written on the primary)`);
+  await refreshReplication();
+  $("rep-go").disabled = false;
+};
 
-/* protocol steps -> timeline */
-function stepClass(text) {
-  const t = text.toLowerCase();
+/* ---------------- 2. load balancing ---------------- */
+const lbBranch = segment("lb-branch");
+$("lb-go").onclick = async () => {
+  $("lb-go").disabled = true;
+  $("lb-out").innerHTML = `<div class="muted"><span class="dot warn live"></span> Sending traffic…</div>`;
+  const b = lbBranch();
+  const [st, d] = await post("/api/loadtest", { branch: b, reads: 30, writes: 5 });
+  $("lb-go").disabled = false;
+  if (st !== 200) { $("lb-out").innerHTML = `<div class="errbox">Test failed (${st}).</div>`; return; }
+  const nodes = S ? S.branches[b].nodes : [];
+  const max = Math.max(1, ...d.nodes.map(n => n.reads + n.writes));
+  const prim = nodes.find(n => n.role === "primary");
+  $("lb-out").innerHTML = `<div class="bars">` + d.nodes.map(n => {
+    const info = nodes.find(x => x.name === n.name) || {};
+    const role = info.role === "primary" ? "★ primary" : info.role || "";
+    return `<div class="bar-row"><div class="lbl"><span><b class="mono">${esc(n.name)}</b> <span class="muted">${esc(role)}${info.host ? " · " + esc(info.host) : ""}</span></span>
+      <span class="num"><b>${n.reads}</b> reads · <b>${n.writes}</b> writes</span></div>
+      <div class="bar"><span class="r" style="width:${n.reads / max * 100}%"></span><span class="w" style="width:${n.writes / max * 100}%"></span></div></div>`;
+  }).join("") + `</div><div class="legend"><span><i style="background:var(--ok)"></i>reads</span><span><i style="background:var(--accent)"></i>writes</span></div>
+    <div class="verdict-line ok">✓ ${d.reads_ok} reads spread over the replicas; ${d.writes_ok} writes all sent to the primary${prim ? " " + esc(prim.name) : ""}.</div>`;
+  addEvent("acc", `Load test on Branch ${esc(b)}: ${d.reads_ok} reads, ${d.writes_ok} writes through HAProxy`);
+};
+
+/* ---------------- 3. distributed transaction ---------------- */
+let pickersFilled = false;
+function fillAccountPickers(s) {
+  if (pickersFilled) return;
+  const accts = Object.values(s.branches).flatMap(b => b.accounts || []).filter(a => !a.id.endsWith("VAULT"));
+  if (accts.length < 20) return;
+  const opts = accts.map(a => `<option value="${esc(a.id)}">${esc(a.id)} · ${esc(a.owner)}</option>`).join("");
+  $("rep-acct").innerHTML = opts; $("tx-from").innerHTML = opts; $("tx-to").innerHTML = opts;
+  $("rep-acct").value = "A-1001"; $("tx-from").value = "A-1001"; $("tx-to").value = "B-1001";
+  pickersFilled = true;
+  refreshReplication();
+}
+function stepClass(t) {
+  t = t.toLowerCase();
   if (/fail|unreachable|crash|rolled back|abort|error/.test(t)) return "err";
   if (t.startsWith("phase 1")) return "p1";
   if (t.startsWith("phase 2")) return "p2";
   if (t.includes("decision")) return "dec";
-  if (/committed/.test(t)) return "done";
+  if (t.includes("committed")) return "done";
   return "";
 }
 function renderSteps(steps) {
   return `<ol class="steps">` + steps.map(line => {
-    const m = /^\s*(\d+)\s*ms\s+(.*)$/.exec(line);
-    const ms = m ? m[1] + " ms" : "";
-    let text = esc(m ? m[2] : line);
-    text = text.replace(/^phase (\d)(:)?/i, (_, n) => `<span class="phase">PHASE ${n}</span>`);
-    return `<li class="${stepClass(m ? m[2] : line)}"><span class="pt"></span><span class="ms">${ms}</span><span class="txt">${text}</span></li>`;
+    const m = /^\s*(\d+)\s*ms\s+(.*)$/.exec(line), text = m ? m[2] : line;
+    const html = esc(text).replace(/^phase (\d):?/i, (_, n) => `<span class="ph">PHASE ${n}</span>`);
+    return `<li class="${stepClass(text)}"><span class="pt"></span><span class="ms">${m ? m[1] + " ms" : ""}</span><span class="txt">${html}</span></li>`;
   }).join("") + `</ol>`;
 }
-function showResult(head, body) { $("result").innerHTML = `<div class="result-h">${head}</div>${body || ""}`; }
-
-async function post(path, body) {
-  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
-  return [r.status, await r.json()];
+function txResult(st, d) {
+  const detail = d.detail && typeof d.detail === "object" ? d.detail : d;
+  const steps = detail.steps ? renderSteps(detail.steps) : "";
+  if (st === 200) return `<div style="margin-bottom:10px"><span class="state ${STATE[d.state] || "grey"}">${esc(d.state)}</span>
+      <b style="margin-left:6px">${d.kind === "2pc" ? "Two-phase commit" : "Local transaction (same branch)"}</b></div>${steps}`;
+  return `<div class="errbox">${esc(typeof d.detail === "string" ? d.detail : (detail.error || "Transfer did not complete (HTTP " + st + ")"))}</div>${steps}`;
+}
+$("tx-go").onclick = async () => {
+  const f = $("tx-from").value, t = $("tx-to").value;
+  if (f === t) { $("tx-out").innerHTML = `<div class="errbox">Pick two different accounts.</div>`; return; }
+  $("tx-go").disabled = true;
+  $("tx-out").innerHTML = `<div class="muted"><span class="dot warn live"></span> Running…</div>`;
+  try {
+    const [st, d] = await post("/api/transfer", { from_account: f, to_account: t, amount: $("tx-amt").value });
+    $("tx-out").innerHTML = txResult(st, d);
+  } catch (e) { $("tx-out").innerHTML = `<div class="errbox">Request failed.</div>`; }
+  $("tx-go").disabled = false;
+};
+function renderTxList(s) {
+  if (!s.coord) { $("tx-list").innerHTML = "Coordinator log unreachable."; return; }
+  if (!s.coord.recent.length) { $("tx-list").innerHTML = "No transfers yet."; return; }
+  $("tx-list").innerHTML = s.coord.recent.slice(0, 6).map(t => `<div class="txn">
+    <span class="muted mono" style="font-size:12px">${esc(clock(t.time))}</span>
+    <span class="route mono">${esc(t.from)} → ${esc(t.to)}</span>
+    <span class="num"><b>${money(t.amount)}</b></span>
+    <span class="state ${STATE[t.state] || "grey"}">${esc(t.state)}</span></div>`).join("");
 }
 
-$("tform").addEventListener("submit", async ev => {
-  ev.preventDefault();
-  if ($("from").value === $("to").value) return;
-  $("send").disabled = true;
-  showResult(`<span class="dot warn live"></span> Sending…`);
-  const body = { from_account: $("from").value, to_account: $("to").value, amount: $("amount").value };
-  if ($("fault").value) body.fault = $("fault").value;
-  try {
-    const [status, d] = await post("/api/transfer", body);
-    const detail = d.detail && typeof d.detail === "object" ? d.detail : d;
-    const steps = detail.steps ? renderSteps(detail.steps) : "";
-    if (status === 200) {
-      const cls = STATE[d.state] || "grey";
-      showResult(`<span class="state ${cls}">${esc(d.state)}</span> ${d.kind === "2pc" ? "Two-phase commit" : "Local transaction"} <span class="mono" style="color:var(--muted);font-weight:500">${esc(d.txn_id)}</span>`, steps);
-    } else {
-      const msg = typeof d.detail === "string" ? d.detail : (detail.error || "error");
-      showResult(`<span class="state warn">HTTP ${status}</span> Transfer did not complete`, `<div class="errbox">${esc(msg)}</div>${steps}`);
-    }
-  } catch (e) { showResult(`<span class="state warn">Error</span>`, `<div class="errbox">Request failed: ${esc(e)}</div>`); }
-  $("send").disabled = false;
-  $("fault").value = ""; $("fault-box").open = false; syncSendButton();
-});
+/* ---------------- 4. fault tolerance ---------------- */
+const ftBranch = segment("ft-branch", () => S && renderFailover(S));
+function renderFailover(s) {
+  const k = ftBranch(), b = s.branches[k], f = fo[k] || {};
+  const prim = b.nodes.find(n => n.role === "primary");
+  const target = prim ? prim.name : (f.oldPrimary || b.nodes[0].name);
+  const host = (b.nodes.find(n => n.name === target) || {}).host;
+  $("ft-who").innerHTML = prim
+    ? `The primary of ${esc(b.name)} is <b class="mono">${esc(prim.name)}</b> on <b>${esc(laptop(prim.host))}</b>. Kill it — on that laptop run:`
+    : `${esc(b.name)} has no primary right now. The last one was <b class="mono">${esc(target)}</b> on <b>${esc(laptop(host))}</b>.`;
+  $("ft-kill").textContent = `docker kill ${target}`;
+  $("ft-start").textContent = `docker start ${f.oldPrimary || target}`;
 
-$("recover").addEventListener("click", async () => {
-  showResult(`<span class="dot warn live"></span> Running recovery…`);
-  try {
-    const [status, d] = await post("/api/recover");
-    if (status !== 200) return showResult(`<span class="state warn">HTTP ${status}</span> Recovery failed`, `<div class="errbox">${esc(d.detail)}</div>`);
-    if (!d.resolved.length) return showResult(`<span class="state ok">OK</span> Recovery: nothing left to resolve`);
-    showResult(`<span class="state ok">Recovery pass</span> ${d.resolved.length} transaction(s)`,
-      `<ol class="steps">` + d.resolved.map(r => `<li class="${r.unreachable ? "err" : "done"}"><span class="pt"></span><span class="ms"></span>
-        <span class="txt"><span class="mono">${esc(r.txn_id)}</span>: ${esc(r.was)} → <b>${esc(r.now)}</b>${r.unreachable ? " (branch " + esc(r.unreachable.join(",")) + " unreachable)" : ""}</span></li>`).join("") + `</ol>`);
-  } catch (e) { showResult(`<span class="state warn">Error</span>`, `<div class="errbox">Request failed: ${esc(e)}</div>`); }
-});
+  let status;
+  if (f.downAt) {
+    const secs = Math.round((Date.now() - f.downAt) / 1000);
+    status = `<div class="big-status" style="color:var(--warn)">⏳ Electing a new primary… ${secs} s</div>
+      <div class="muted"><b class="mono">${esc(f.oldPrimary)}</b> is gone. The replicas wait for its lock in etcd to expire (about 20 s), then one is promoted.</div>`;
+  } else if (f.newPrimary && f.doneAt && Date.now() - f.doneAt < 5 * 60 * 1000) {
+    status = `<div class="big-status" style="color:var(--ok)">✓ Failover complete${f.took != null ? ` in ${f.took} s` : ""}</div>
+      <div class="muted"><b class="mono">${esc(f.newPrimary)}</b> took over as primary${f.oldPrimary ? ` from <b class="mono">${esc(f.oldPrimary)}</b>` : ""}. Writes work again.</div>`;
+  } else if (prim) {
+    status = `<div class="big-status" style="color:var(--ok)">✓ Healthy</div><div class="muted">Primary: <b class="mono">${esc(prim.name)}</b>. Waiting for you to kill it…</div>`;
+  } else {
+    status = `<div class="big-status" style="color:var(--bad)">No primary</div>`;
+  }
+  const list = b.nodes.map(n => {
+    const [cls, text] = ROLE[n.role] || ["other", n.role];
+    return `<tr><td><b class="mono">${esc(n.name)}</b></td><td class="muted">${esc(laptop(n.host))}</td><td class="r"><span class="badge ${cls}">${esc(text)}</span></td></tr>`;
+  }).join("");
+  $("ft-out").innerHTML = status + `<table class="t" style="margin-top:14px">${list}</table>`;
+}
 
+/* ---------------- 5. availability ---------------- */
+const av = { on: false, r: [], w: [], rOk: 0, rBad: 0, wOk: 0, wBad: 0 };
+function drawStrip(id, arr) { $(id).innerHTML = Array.from({ length: 40 }, (_, i) => { const v = arr[arr.length - 40 + i]; return `<i class="${v || ""}"></i>`; }).join(""); }
+function drawAv() {
+  drawStrip("av-r", av.r); drawStrip("av-w", av.w);
+  $("av-r-n").textContent = `${av.rOk} ok · ${av.rBad} failed`;
+  $("av-w-n").textContent = `${av.wOk} ok · ${av.wBad} failed`;
+  const lastR = av.r.slice(-5), lastW = av.w.slice(-5);
+  $("av-verdict").className = "verdict-line " + (!av.on ? "" : lastW.includes("bad") || lastR.includes("bad") ? "warn" : "ok");
+  $("av-verdict").textContent = !av.on ? (av.rOk + av.wOk ? "Traffic stopped." : "")
+    : lastW.includes("bad") && !lastR.includes("bad") ? "Writes paused (no primary yet) — reads still served by replicas"
+    : lastR.includes("bad") || lastW.includes("bad") ? "Some requests failing — waiting for the cluster to recover"
+    : "✓ Bank is serving customers normally";
+}
+async function avReads() {
+  const accts = ["A-1002", "B-1002", "A-1005", "B-1005"]; let i = 0;
+  while (av.on) {
+    try { const r = await fetch("/api/account/" + accts[i++ % accts.length], { cache: "no-store" }); const ok = r.ok; av.r.push(ok ? "ok" : "bad"); ok ? av.rOk++ : av.rBad++; }
+    catch (e) { av.r.push("bad"); av.rBad++; }
+    drawAv(); await sleep(1000);
+  }
+}
+async function avWrites() {
+  let dir = 0;
+  while (av.on) {
+    const [f, t] = dir++ % 2 ? ["B-1003", "A-1003"] : ["A-1003", "B-1003"];   // ₹1 back and forth
+    try { const [st] = await post("/api/transfer", { from_account: f, to_account: t, amount: "1" }); const ok = st === 200; av.w.push(ok ? "ok" : "bad"); ok ? av.wOk++ : av.wBad++; }
+    catch (e) { av.w.push("bad"); av.wBad++; }
+    drawAv(); await sleep(1000);
+  }
+}
+$("av-go").onclick = () => {
+  av.on = !av.on;
+  $("av-go").textContent = av.on ? "■ Stop customer traffic" : "▶ Start customer traffic";
+  $("av-go").className = "btn " + (av.on ? "danger" : "ok");
+  $("traffic-chip").style.display = av.on ? "" : "none";
+  if (av.on) { av.r = []; av.w = []; av.rOk = av.rBad = av.wOk = av.wBad = 0; avReads(); avWrites(); addEvent("acc", "Customer traffic <b>started</b>"); }
+  else addEvent("acc", "Customer traffic stopped");
+  drawAv();
+};
+drawAv();
+
+/* ---------------- 6. recovery ---------------- */
+let rcLast = null;
+$("rc-go").onclick = async () => {
+  const fault = document.querySelector("input[name=rcf]:checked").value;
+  $("rc-go").disabled = true;
+  const before = new Set(S && S.coord ? S.coord.recent.map(t => t.txn_id) : []);   // to spot the new one
+  try {
+    const [st, d] = await post("/api/transfer", { from_account: "A-1001", to_account: "B-1001", amount: "500", fault });
+    rcLast = { st, d, fault, before };
+    addEvent("bad", `Transfer sent with a <b>coordinator crash</b> injected`);
+  } catch (e) { rcLast = { st: 0, d: {}, fault, before }; }
+  $("rc-go").disabled = false;
+  S && renderRecovery(S, S._doubt || 0);
+};
+function renderRecovery(s, doubt) {
+  $("rc-where").innerHTML = s.coordinator_host ? ` — on the coordinator laptop <b>${esc(s.coordinator_host)}</b>` : "";
+  const cs = s.coordinator;
+  let html = `<div class="big-status" style="color:${cs === "ok" ? "var(--ok)" : cs === "starting" ? "var(--warn)" : "var(--bad)"}">
+    Coordinator: ${cs === "ok" ? "✓ running" : cs === "starting" ? "starting…" : "✗ DOWN"}</div>`;
+  const prep = Object.entries(s.branches).flatMap(([k, b]) => (b.prepared || []).map(p => ({ k, ...p })));
+  if (prep.length) html += `<div class="indoubt"><b style="color:var(--warn)">${prep.length} prepared transaction(s) waiting for a decision</b> — their rows are locked:<br>` +
+    prep.map(p => `Branch ${esc(p.k)}: <span class="mono">${esc(p.gid)}</span>`).join("<br>") + `</div>`;
+  else html += `<div class="muted" style="margin-bottom:10px">${doubt ? `${doubt} transfer(s) unresolved in the coordinator's log.` : "Nothing in doubt."}</div>`;
+  if (rcLast && !s.coord) {
+    html += `<h3 style="margin-top:16px">Your crashed transfer</h3><div class="verdict-line warn">⏳ Coordinator log unavailable while the coordinator is down — restart it.</div>`;
+  } else if (rcLast && s.coord) {
+    const txt = rcLast.d && rcLast.d.detail && typeof rcLast.d.detail === "string" ? rcLast.d.detail : "";
+    html += `<h3 style="margin-top:16px">Your crashed transfer</h3>`;
+    if (txt) html += `<div class="muted" style="margin-bottom:8px">${esc(txt)}</div>`;
+    const recent = s.coord.recent.find(t => !rcLast.before.has(t.txn_id) && t.from === "A-1001" && t.to === "B-1001" && Number(t.amount) === 500);
+    if (recent) {
+      const st = recent.state;
+      html += `<div class="txn"><span class="route mono">A-1001 → B-1001</span><b>${money(recent.amount)}</b><span class="state ${STATE[st] || "grey"}">${esc(st)}</span></div>`;
+      if (st === "COMMITTED" || st === "ABORTED") html += `<div class="verdict-line ok">✓ Resolved by recovery: ${st === "COMMITTED" ? "money moved on both branches" : "rolled back on both branches"}.</div>`;
+      else html += `<div class="verdict-line warn">⏳ Waiting — restart the coordinator to resolve it.</div>`;
+    } else html += `<div class="muted">Waiting for the coordinator's log… (restart the coordinator)</div>`;
+  }
+  $("rc-out").innerHTML = html;
+}
+
+/* ---------------- poll ---------------- */
 async function poll() {
   try {
     const r = await fetch("/api/state", { cache: "no-store" });
-    render(await r.json());
+    S = await r.json();
+    render(S);
     $("stale").style.display = "none";
     $("livedot").className = "dot ok live";
-    $("updated").textContent = "Live · " + new Date().toLocaleTimeString([], { hour12: false });
+    $("updated").textContent = "Live · " + clock();
   } catch (e) {
     $("stale").style.display = "block";
     $("livedot").className = "dot bad";
@@ -544,6 +779,7 @@ async function poll() {
   }
   setTimeout(poll, 1000);
 }
+showTab(activeTab);
 poll();
 </script>
 </body>
