@@ -278,6 +278,45 @@ Then tell everyone: **"Step 3 done: pg-a2 and pg-b2 are primary."**
 
 ---
 
+## Adding another laptop as a coordinator candidate (e.g. Kaustubh)
+
+An extra laptop joins **only** as a coordinator candidate: its own HAProxy,
+coordinator and dashboard. It does **not** run etcd or database nodes, so
+nothing on the other laptops changes and no data moves. It becomes one more
+standby that can take over if the leading coordinator dies.
+
+1. **Same Wi-Fi as the others.** Its IP must start with the same numbers as
+   theirs (e.g. `10.60.`). macOS: `ipconfig getifaddr en0`; Linux:
+   `ip route get 1.1.1.1` (after `src`). Report it to your human.
+2. **Prerequisites** as in Step 0: Docker running, `docker compose version`
+   works, and nothing already uses ports 8000, 8080 or 8404
+   (`docker ps --format '{{.Names}}\t{{.Ports}}'`). Linux with ufw:
+   `sudo ufw allow 8000/tcp; sudo ufw allow 8080/tcp; sudo ufw allow 8404/tcp`.
+3. Get the code and check the cluster is reachable:
+   ```bash
+   cd ~ && git clone https://github.com/harshshrivastava27/DistBank.git   # or: cd ~/DistBank && git pull
+   cd ~/DistBank/multi && chmod +x cluster.sh ../demo.sh
+   ./cluster.sh check-etcd     # must say "3 of 3 members healthy" (2 of 3 is also enough)
+   ./cluster.sh status         # one primary + two replicas per branch
+   ```
+   If `check-etcd` shows fewer than 2 healthy members, **STOP** and tell
+   your human: this laptop cannot reach the others (Wi-Fi or firewall).
+4. Start the candidate under the owner's name:
+   ```bash
+   COORD_NAME=Kaustubh ./cluster.sh candidate up
+   # if the IP is not found automatically:
+   # COORD_NAME=Kaustubh THIS_IP=<this laptop's IP> ./cluster.sh candidate up
+   ./cluster.sh leader
+   ```
+   The new name must appear under **"Alive"** (as a standby; the current
+   leader keeps leading). Its dashboard is `http://<this laptop's IP>:8080`.
+5. Do **not** run `./cluster.sh etcd ...` or `./cluster.sh node ...` on this
+   laptop, and do not edit `cluster.env`.
+
+To have the other laptops' dashboards show this laptop's name instead of its
+bare IP, Harsh adds it to `LAPTOP_NAMES` in `cluster.env` later; that is
+cosmetic and not needed for anything to work.
+
 ## Step 6. Final check (any laptop)
 
 ```bash

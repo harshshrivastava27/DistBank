@@ -170,8 +170,10 @@ case "$cmd" in
   candidate)
     THIS_IP=$(this_ip); export THIS_IP
     [ -n "$THIS_IP" ] || { echo "could not find this laptop's IP; run with THIS_IP=x.x.x.x" >&2; exit 1; }
-    COORD_NAME=""
-    for pair in ${LAPTOP_NAMES:-}; do [ "${pair%%=*}" = "$THIS_IP" ] && COORD_NAME="${pair#*=}"; done
+    COORD_NAME="${COORD_NAME:-}"        # can be given on the command line: COORD_NAME=Kaustubh ./cluster.sh candidate up
+    if [ -z "$COORD_NAME" ]; then
+      for pair in ${LAPTOP_NAMES:-}; do [ "${pair%%=*}" = "$THIS_IP" ] && COORD_NAME="${pair#*=}"; done
+    fi
     COORD_NAME="${COORD_NAME:-coord-$THIS_IP}"; export COORD_NAME LAPTOP_NAMES
     case "${1:-up}" in
       up)
