@@ -128,11 +128,14 @@ case "$cmd" in
   candidate)
     THIS_IP=$(this_ip); export THIS_IP
     [ -n "$THIS_IP" ] || { echo "could not find this laptop's IP; run with THIS_IP=x.x.x.x" >&2; exit 1; }
+    COORD_NAME=""
+    for pair in ${LAPTOP_NAMES:-}; do [ "${pair%%=*}" = "$THIS_IP" ] && COORD_NAME="${pair#*=}"; done
+    COORD_NAME="${COORD_NAME:-coord-$THIS_IP}"; export COORD_NAME LAPTOP_NAMES
     case "${1:-up}" in
       up)
         tcp "$COORD_IP" 2379 || { echo "etcd at $COORD_IP:2379 not reachable" >&2; exit 1; }
         dc_cand up -d --build
-        echo "Coordinator candidate coord-$THIS_IP started. Dashboard: http://$THIS_IP:8080"
+        echo "Coordinator candidate $COORD_NAME ($THIS_IP) started. Dashboard: http://$THIS_IP:8080"
         echo "Who leads:  ./multi/cluster.sh leader" ;;
       down) dc_cand down ;;
       *) echo "candidate up|down" >&2; exit 1 ;;

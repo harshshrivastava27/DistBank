@@ -228,6 +228,7 @@ def api_state():
     state["total"] = str(sum(Decimal(t) for t in totals)) if all(totals) else None
     state["invariant"] = verdict
     state["coordinators"] = safe(coordinators_view)
+    state["laptops"] = config.LAPTOP_NAMES
     host = urlparse(coordinator_url()).hostname
     state["coordinator_host"] = None if host == "coordinator" else host
     return state

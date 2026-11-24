@@ -21,6 +21,9 @@ COORDINATOR_ADVERTISE_URL = os.getenv("COORDINATOR_ADVERTISE_URL", COORDINATOR_U
 COORD_LOG_BRANCH = os.getenv("COORD_LOG_BRANCH")
 COORD_LOG_DB = os.getenv("COORD_LOG_DB", "coordlog")
 
+# "10.60.1.152=Christy 10.60.14.88=Yash" -> {"10.60.1.152": "Christy", ...}
+LAPTOP_NAMES = dict(p.split("=", 1) for p in os.getenv("LAPTOP_NAMES", "").split() if "=" in p)
+
 # The bank is sharded by branch. The first letter of an account id ("A-1001")
 # is the shard key: it says which database cluster holds that account.
 BRANCHES = {

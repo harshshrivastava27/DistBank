@@ -452,7 +452,8 @@ function segment(id, onChange) {
 let S = null;                 // latest /api/state
 const ROLE = { "primary": ["primary", "★ Primary"], "sync replica": ["sync", "Sync replica"], "replica": ["replica", "Replica"], "down": ["down", "Down"] };
 const STATE = { COMMITTED: "ok", ABORTED: "grey", STARTED: "warn", COMMITTING: "warn", ABORTING: "warn" };
-const laptop = h => h ? `laptop ${h}` : "this computer";
+const owner = h => (S && S.laptops && S.laptops[h]) || null;
+const laptop = h => !h ? "this computer" : owner(h) ? `${owner(h)}'s laptop (${h})` : `laptop ${h}`;
 
 function renderBranch(b) {
   const up = b.nodes.filter(n => n.role !== "down").length;
@@ -463,7 +464,7 @@ function renderBranch(b) {
       : n.lag_bytes == null ? "Catching up…" : n.lag_bytes === 0 ? "Fully up to date" : `Behind by ${n.lag_bytes.toLocaleString()} bytes`;
     return `<div class="node ${n.role === "primary" ? "primary" : n.role === "down" ? "down" : ""}">
       <div class="name">${esc(n.name)}</div>
-      <div class="host">${esc(n.host ? "on " + n.host : "")}</div>
+      <div class="host">${n.host ? (owner(n.host) ? `on <b>${esc(owner(n.host))}</b> · ${esc(n.host)}` : "on " + esc(n.host)) : ""}</div>
       <div class="role"><span class="badge ${cls}">${esc(text)}</span></div>
       <div class="meta">${esc(meta)}</div></div>`;
   }).join("");

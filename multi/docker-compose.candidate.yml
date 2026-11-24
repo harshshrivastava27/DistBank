@@ -8,7 +8,8 @@
 #
 # The coordinator's log is the "coordlog" database inside Branch A's replicated
 # cluster, so every candidate reads the same log and it survives any one laptop.
-# THIS_IP (this laptop's address) is filled in by cluster.sh.
+# THIS_IP (this laptop's address) and COORD_NAME (its owner, from LAPTOP_NAMES
+# in cluster.env) are filled in by cluster.sh.
 name: distbank-candidate
 
 x-env: &env
@@ -16,7 +17,8 @@ x-env: &env
   HAPROXY_HOST: haproxy
   ELECTION_ETCD: http://${COORD_IP}:2379
   COORD_LOG_BRANCH: A
-  COORDINATOR_NAME: coord-${THIS_IP}
+  COORDINATOR_NAME: ${COORD_NAME}
+  LAPTOP_NAMES: ${LAPTOP_NAMES:-}
   COORDINATOR_ADVERTISE_URL: http://${THIS_IP}:8000
   PG_A1_IP: ${PG_A1_IP}
   PG_A2_IP: ${PG_A2_IP}
