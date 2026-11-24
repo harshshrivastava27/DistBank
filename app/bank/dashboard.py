@@ -96,6 +96,27 @@ def branch_primary_view(branch: str):
 
 
 def coord_view():
+    try:
+        return coord_view_db()
+    except Exception:
+        # Dashboard running on another laptop: the log database isn't exposed,
+        # but the coordinator's API serves the same log.
+        return coord_view_api()
+
+
+def coord_view_api():
+    rows = httpx.get(f"{config.COORDINATOR_URL}/transactions", params={"limit": 200}, timeout=1.5).json()
+    counts = {}
+    for r in rows:
+        counts[r["state"]] = counts.get(r["state"], 0) + 1
+    recent = [{"txn_id": r["txn_id"], "kind": r["kind"], "from": r["from_account"], "to": r["to_account"],
+               "amount": str(r["amount"]), "state": r["state"], "note": r["note"], "time": r["created_at"]}
+              for r in rows[:14]]
+    open_count = sum(1 for r in rows if r["state"] in ("STARTED", "COMMITTING", "ABORTING"))
+    return {"recent": recent, "open": open_count, "counts": counts}
+
+
+def coord_view_db():
     with db.connect_coord() as c:
         rows = c.execute(
             "SELECT txn_id, kind, from_account, to_account, amount, state, note, "

@@ -5,22 +5,25 @@ from decimal import Decimal
 HAPROXY_HOST = os.getenv("HAPROXY_HOST", "haproxy")
 HAPROXY_STATS_URL = os.getenv("HAPROXY_STATS_URL", f"http://{HAPROXY_HOST}:7000/;csv")
 COORDINATOR_URL = os.getenv("COORDINATOR_URL", "http://coordinator:8000")
+# Added to the HAProxy ports below. 0 inside Docker; 500 when talking to another
+# laptop's HAProxy from outside (it publishes 5000-5003 as 5500-5503).
+HAPROXY_PORT_OFFSET = int(os.getenv("HAPROXY_PORT_OFFSET", "0"))
 
 # The bank is sharded by branch. The first letter of an account id ("A-1001")
 # is the shard key: it says which database cluster holds that account.
 BRANCHES = {
     "A": {
         "name": "Branch A",
-        "write_port": 5000,          # HAProxy -> current primary
-        "read_port": 5001,           # HAProxy -> round-robin over replicas
+        "write_port": 5000 + HAPROXY_PORT_OFFSET,          # HAProxy -> current primary
+        "read_port": 5001 + HAPROXY_PORT_OFFSET,           # HAProxy -> round-robin over replicas
         "nodes": ["pg-a1", "pg-a2", "pg-a3"],
         "haproxy_write": "branch_a_write",
         "haproxy_read": "branch_a_read",
     },
     "B": {
         "name": "Branch B",
-        "write_port": 5002,
-        "read_port": 5003,
+        "write_port": 5002 + HAPROXY_PORT_OFFSET,
+        "read_port": 5003 + HAPROXY_PORT_OFFSET,
         "nodes": ["pg-b1", "pg-b2", "pg-b3"],
         "haproxy_write": "branch_b_write",
         "haproxy_read": "branch_b_read",
