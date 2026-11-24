@@ -3,7 +3,8 @@
 # SAME multi/cluster.env everywhere.
 #
 #   ./multi/cluster.sh check                    can this laptop reach all the others?
-#   ./multi/cluster.sh check-etcd               is etcd on the coordinator laptop reachable/healthy?
+#   ./multi/cluster.sh etcd up|down|reset       this laptop's member of the 3-laptop etcd cluster
+#   ./multi/cluster.sh check-etcd               are the etcd members reachable and healthy?
 #   ./multi/cluster.sh coord up|down|reset      coordinator laptop
 #   ./multi/cluster.sh node pg-a1 pg-b2 up      database laptop (list its nodes)
 #   ./multi/cluster.sh node pg-a1 pg-b2 down|reset
@@ -28,18 +29,34 @@ for _n in A1 A2 A3 B1 B2 B3; do
 done
 [ -n "$COORD_IP" ] || { echo "cluster.env: set COORD_IP (or CONTROL_IP)" >&2; exit 1; }
 
+# etcd members: one per laptop in ETCD_IPS (3 recommended). Without ETCD_IPS,
+# the old single etcd on the coordinator laptop is used.
+ETCD_IPS="${ETCD_IPS:-$COORD_IP}"
+ETCD_HOSTS=""; ETCD_URLS=""; ETCD_INITIAL_CLUSTER=""
+for ip in $ETCD_IPS; do
+  ETCD_HOSTS="${ETCD_HOSTS:+$ETCD_HOSTS,}$ip:2379"
+  ETCD_URLS="${ETCD_URLS:+$ETCD_URLS,}http://$ip:2379"
+  ETCD_INITIAL_CLUSTER="${ETCD_INITIAL_CLUSTER:+$ETCD_INITIAL_CLUSTER,}etcd-$(echo "$ip" | tr . -)=http://$ip:2380"
+done
+export ETCD_IPS ETCD_HOSTS ETCD_URLS ETCD_INITIAL_CLUSTER LAPTOP_NAMES
+
 ALL="pg-a1 pg-a2 pg-a3 pg-b1 pg-b2 pg-b3"
 ip_of()  { v="$(echo "$1" | tr 'a-z-' 'A-Z_')_IP"; eval echo "\${$v:-}"; }
 port_of() { case "$1" in pg-a1) echo "5411 8011";; pg-a2) echo "5412 8012";; pg-a3) echo "5413 8013";;
                          pg-b1) echo "5421 8021";; pg-b2) echo "5422 8022";; pg-b3) echo "5423 8023";;
                          *) echo "unknown node $1" >&2; exit 1;; esac; }
-tcp() {  # tcp <host> <port>  -> 0 if something answers
-  if command -v nc >/dev/null 2>&1; then nc -z -w 3 "$1" "$2" >/dev/null 2>&1
+tcp() {  # tcp <host> <port>  -> 0 if something answers within 3 s
+  if [ "$(uname)" = Darwin ]; then nc -z -G 3 -w 3 "$1" "$2" >/dev/null 2>&1   # macOS nc needs -G for the connect timeout
+  elif command -v nc >/dev/null 2>&1; then nc -z -w 3 "$1" "$2" >/dev/null 2>&1
   else (exec 3<>"/dev/tcp/$1/$2") >/dev/null 2>&1; fi
 }
 dc_coord() { docker compose --env-file "$ENV" -f docker-compose.coord.yml "$@"; }
 dc_nodes() { docker compose --env-file "$ENV" -f docker-compose.nodes.yml "$@"; }
 dc_cand()  { docker compose --env-file "$ENV" -f docker-compose.candidate.yml "$@"; }
+dc_etcd()  { docker compose --env-file "$ENV" -f docker-compose.etcd.yml "$@"; }
+etcd_any() {  # first etcd member that answers
+  for ip in $ETCD_IPS; do tcp "$ip" 2379 && { echo "$ip"; return 0; }; done; return 1
+}
 this_ip() {  # this laptop's Wi-Fi address (override with THIS_IP=... in the environment)
   [ -n "${THIS_IP:-}" ] && { echo "$THIS_IP"; return; }
   ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'
@@ -48,24 +65,42 @@ etcd_get() {  # etcd_get <key-or-prefix> [prefix]  -> JSON values, one per line
   k=$(printf '%s' "$1" | base64)
   if [ -n "${2:-}" ]; then e=$(printf '%s' "${1%?}$(printf '%s' "${1: -1}" | tr '/' '0')" | base64); body="{\"key\":\"$k\",\"range_end\":\"$e\"}"
   else body="{\"key\":\"$k\"}"; fi
-  curl -s -m 3 -X POST "http://$COORD_IP:2379/v3/kv/range" -d "$body" \
+  ip=$(etcd_any) || { echo "  (no etcd member reachable)"; return; }
+  curl -s -m 3 -X POST "http://$ip:2379/v3/kv/range" -d "$body" \
     | grep -o '"value":"[^"]*"' | cut -d'"' -f4 | while read -r v; do printf '%s' "$v" | base64 -d; echo; done
 }
 
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   check-etcd)
-    echo "etcd on the coordinator laptop: http://$COORD_IP:2379"
-    if ! tcp "$COORD_IP" 2379; then
-      echo "  NOT reachable. Is './multi/cluster.sh coord up' running on $COORD_IP? Firewall / Wi-Fi isolation?"; exit 1
-    fi
-    echo "  port 2379 open"
-    printf '  health:  '; curl -s -m 3 "http://$COORD_IP:2379/health"; echo
-    printf '  version: '; curl -s -m 3 "http://$COORD_IP:2379/version"; echo
-    # members' advertised client URL must be the coordinator's IP, not "etcd" or localhost
-    printf '  members: '; curl -s -m 3 -X POST "http://$COORD_IP:2379/v3/cluster/member/list" -d '{}' \
-      | grep -o '"clientURLs":\[[^]]*\]' || echo "(could not list)"
+    up=0; n=0
+    for ip in $ETCD_IPS; do
+      n=$((n+1))
+      printf '  %-16s ' "$ip"
+      if tcp "$ip" 2379; then
+        h=$(curl -s -m 3 "http://$ip:2379/health"); echo "$h" | grep -q '"true"' && up=$((up+1))
+        echo "$h"
+      else echo "not reachable"; fi
+    done
+    q=$((n/2+1))
+    echo "  $up of $n members healthy (needs $q for elections to work)"
+    ip=$(etcd_any) && curl -s -m 3 -X POST "http://$ip:2379/v3/cluster/member/list" -d '{}' \
+      | grep -o '"name":"[^"]*"' | cut -d'"' -f4 | tr '\n' ' ' | sed 's/^/  members: /'; echo
+    [ "$up" -ge "$q" ]
     ;;
+
+  etcd)
+    THIS_IP=$(this_ip); export THIS_IP
+    ETCD_MEMBER="etcd-$(echo "$THIS_IP" | tr . -)"; export ETCD_MEMBER
+    case " $ETCD_IPS " in *" $THIS_IP "*) ;; *) echo "this laptop ($THIS_IP) is not in ETCD_IPS ($ETCD_IPS)" >&2; exit 1;; esac
+    case "${1:-up}" in
+      up)    dc_etcd up -d
+             echo "etcd member $ETCD_MEMBER started. It needs a majority of ETCD_IPS up to work:"
+             echo "start it on every laptop in ETCD_IPS, then:  ./multi/cluster.sh check-etcd" ;;
+      down)  dc_etcd stop ;;
+      reset) dc_etcd down -v ;;
+      *) echo "etcd up|down|reset" >&2; exit 1 ;;
+    esac ;;
 
   check)
     echo "From this laptop, testing every address in $ENV (needs the other laptops already up)"
@@ -102,7 +137,7 @@ case "$cmd" in
     profiles=""; for n in $nodes; do profiles="$profiles --profile $n"; done
     case "${action:-up}" in
       up)
-        tcp "$COORD_IP" 2379 || echo "WARNING: etcd at $COORD_IP:2379 not reachable yet. Start the coordinator laptop first."
+        etcd_any >/dev/null || echo "WARNING: no etcd member reachable ($ETCD_IPS). Start etcd first:  ./multi/cluster.sh etcd up"
         # shellcheck disable=SC2086
         dc_nodes $profiles up -d --build $nodes ;;
       down)  dc_nodes $profiles stop $nodes ;;
@@ -133,7 +168,7 @@ case "$cmd" in
     COORD_NAME="${COORD_NAME:-coord-$THIS_IP}"; export COORD_NAME LAPTOP_NAMES
     case "${1:-up}" in
       up)
-        tcp "$COORD_IP" 2379 || { echo "etcd at $COORD_IP:2379 not reachable" >&2; exit 1; }
+        etcd_any >/dev/null || { echo "no etcd member reachable ($ETCD_IPS)" >&2; exit 1; }
         dc_cand up -d --build
         echo "Coordinator candidate $COORD_NAME ($THIS_IP) started. Dashboard: http://$THIS_IP:8080"
         echo "Who leads:  ./multi/cluster.sh leader" ;;

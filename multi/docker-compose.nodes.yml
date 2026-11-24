@@ -24,7 +24,7 @@ services:
     environment:
       PATRONI_NAME: pg-a1
       PATRONI_SCOPE: branch-a
-      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_ETCD3_HOSTS: ${ETCD_HOSTS}
       PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_A1_IP}:8011
       PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_A1_IP}:5411
     volumes: [pg-a1-data:/var/lib/postgresql/data]
@@ -37,7 +37,7 @@ services:
     environment:
       PATRONI_NAME: pg-a2
       PATRONI_SCOPE: branch-a
-      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_ETCD3_HOSTS: ${ETCD_HOSTS}
       PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_A2_IP}:8012
       PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_A2_IP}:5412
     volumes: [pg-a2-data:/var/lib/postgresql/data]
@@ -50,7 +50,7 @@ services:
     environment:
       PATRONI_NAME: pg-a3
       PATRONI_SCOPE: branch-a
-      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_ETCD3_HOSTS: ${ETCD_HOSTS}
       PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_A3_IP}:8013
       PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_A3_IP}:5413
     volumes: [pg-a3-data:/var/lib/postgresql/data]
@@ -64,7 +64,7 @@ services:
     environment:
       PATRONI_NAME: pg-b1
       PATRONI_SCOPE: branch-b
-      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_ETCD3_HOSTS: ${ETCD_HOSTS}
       PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_B1_IP}:8021
       PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_B1_IP}:5421
     volumes: [pg-b1-data:/var/lib/postgresql/data]
@@ -77,7 +77,7 @@ services:
     environment:
       PATRONI_NAME: pg-b2
       PATRONI_SCOPE: branch-b
-      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_ETCD3_HOSTS: ${ETCD_HOSTS}
       PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_B2_IP}:8022
       PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_B2_IP}:5422
     volumes: [pg-b2-data:/var/lib/postgresql/data]
@@ -90,7 +90,7 @@ services:
     environment:
       PATRONI_NAME: pg-b3
       PATRONI_SCOPE: branch-b
-      PATRONI_ETCD3_HOSTS: ${COORD_IP}:2379
+      PATRONI_ETCD3_HOSTS: ${ETCD_HOSTS}
       PATRONI_RESTAPI_CONNECT_ADDRESS: ${PG_B3_IP}:8023
       PATRONI_POSTGRESQL_CONNECT_ADDRESS: ${PG_B3_IP}:5423
     volumes: [pg-b3-data:/var/lib/postgresql/data]

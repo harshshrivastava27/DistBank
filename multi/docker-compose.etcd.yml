@@ -1,0 +1,34 @@
+# One member of the 3-laptop etcd cluster. Run on EVERY laptop listed in
+# ETCD_IPS (cluster.env):   ./multi/cluster.sh etcd up
+#
+# etcd is where Patroni elects the database primaries and where the
+# coordinators elect their leader. With one member per laptop, etcd keeps
+# working while any 2 of the 3 are up, so switching off any one laptop no
+# longer stops either election.
+#
+# THIS_IP, ETCD_MEMBER and ETCD_INITIAL_CLUSTER are filled in by cluster.sh.
+name: distbank-etcd
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
+    container_name: etcd-member
+    environment:
+      ETCD_NAME: ${ETCD_MEMBER}
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://${THIS_IP}:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://${THIS_IP}:2380
+      ETCD_INITIAL_CLUSTER: ${ETCD_INITIAL_CLUSTER}
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER_TOKEN: distbank-etcd
+    ports:
+      - "2379:2379"     # clients: Patroni, coordinators, dashboard
+      - "2380:2380"     # the other etcd members
+    volumes:
+      - etcd-data:/etcd-data
+    restart: unless-stopped
+
+volumes:
+  etcd-data:

@@ -24,6 +24,10 @@ finishing or rolling back whatever the old leader left half-done.
 
 etcd is spoken to through its JSON/HTTP gateway (/v3/...), so no extra library
 is needed. Keys and values are base64 encoded; 64-bit ids travel as strings.
+
+etcd itself runs as a cluster of 3 members (one per laptop) and stays usable
+while any 2 are up. ELECTION_ETCD lists them all, comma-separated; requests go
+to the member that last answered and move on to the next if it stops.
 """
 import base64
 import json
@@ -47,10 +51,25 @@ def _unb64(s: str) -> str:
     return base64.b64decode(s).decode()
 
 
+_last_good = {}      # etcd endpoint list -> index of the member that last answered
+
+
 def _post(etcd: str, path: str, body: dict, timeout: float = 2.0) -> dict:
-    r = httpx.post(f"{etcd}{path}", json=body, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    """POST to one etcd member; if it is down (or cut off from the majority),
+    try the next. `etcd` is one URL or several, comma-separated."""
+    endpoints = [e.strip().rstrip("/") for e in etcd.split(",") if e.strip()]
+    start = _last_good.get(etcd, 0)
+    error = None
+    for i in range(len(endpoints)):
+        n = (start + i) % len(endpoints)
+        try:
+            r = httpx.post(f"{endpoints[n]}{path}", json=body, timeout=timeout)
+            r.raise_for_status()
+            _last_good[etcd] = n
+            return r.json()
+        except (httpx.TransportError, httpx.HTTPStatusError) as e:
+            error = e
+    raise error
 
 
 # ---------------------------------------------------------------- read-only helpers
@@ -71,7 +90,7 @@ def get_members(etcd: str) -> list:
 # ---------------------------------------------------------------- the election
 class Election:
     def __init__(self, etcd: str, name: str, url: str, log=print):
-        self.etcd, self.name, self.url, self.log = etcd.rstrip("/"), name, url, log
+        self.etcd, self.name, self.url, self.log = etcd, name, url, log
         self.lease = None
         self.last_renew = 0.0
         self._leader = threading.Event()
@@ -140,7 +159,7 @@ class Election:
                     self._leader.set()
                     self.log(f"[election] {self.name}: WON the election, I am the leader")
             except Exception as e:
-                self.log(f"[election] {self.name}: etcd unreachable ({type(e).__name__})")
+                self.log(f"[election] {self.name}: no etcd member answering ({type(e).__name__})")
 
             if self._leader.is_set() and not self.is_leader():
                 self._step_down(f"could not renew the lease for {TTL - SAFETY} s")
