@@ -299,6 +299,26 @@ coordinators, and a green banner at **₹22,00,000.00**. In tab 3, press
 4. Turn the Wi-Fi back on: its nodes rejoin as replicas, its coordinator as a
    standby. Nothing to run.
 
+## If a node stays "starting" after a rewind (reinitialize it)
+
+Symptom: `./cluster.sh status` shows a node as "replica starting" for minutes,
+and `docker logs <node>` repeats "End of WAL reached on timeline N" /
+"restarted WAL streaming". Its old data has a little history the primary
+never had, so the rewind cannot line it up. Fix: rebuild that node from the
+primary with Patroni's own reinitialize (it deletes only that node's data
+directory and copies a fresh one). **Only do this when the branch has a
+healthy primary AND another running replica** (check `./cluster.sh status`),
+and only when Harsh says so. Run on the laptop of the stuck node:
+
+```bash
+curl -s -X POST http://localhost:8013/reinitialize -H 'Content-Type: application/json' -d '{"force": true}'; echo   # pg-a3
+curl -s -X POST http://localhost:8023/reinitialize -H 'Content-Type: application/json' -d '{"force": true}'; echo   # pg-b3
+```
+
+(Ports: pg-a1 8011, pg-a2 8012, pg-a3 8013, pg-b1 8021, pg-b2 8022, pg-b3 8023.)
+Each prints "reinitialize started". Then repeat `./cluster.sh status` until
+the node is "replica running" (1-2 minutes).
+
 ## If something goes wrong
 
 Stop and show your human the exact output of the failing command plus:
