@@ -1,0 +1,558 @@
+================================================================================
+DistBank - Demo Command Guide
+Group No. 10 · ADBMS project
+Project title: DistBank - a distributed banking system on replicated, sharded
+PostgreSQL with two-phase commit and automatic failover
+
+Members                     ID No.
+Kaustubh Das (LEADER)       2025H1030119G
+Harsh Shrivastava           2025H1030133G
+Yash Bhavsar                2025H1030131
+Christy George Joseph       2025H1030026G
+Soham Deshpande             2025H1030043G
+
+THIS COPY IS FOR HARSH'S LAPTOP (10.60.13.12, macOS, zsh)
+================================================================================
+
+HOW TO USE THIS FILE
+- Every command is on ONE line. Copy the whole line and paste it into the terminal.
+- Lines starting with "$" are commands (do NOT copy the "$ " itself).
+- Lines under "Expected:" are sample output (your numbers will differ slightly).
+- "Say:" lines are what to tell the professor.
+- [TERMINAL] = Harsh's terminal 2 · [DASHBOARD] = browser
+  [YASH] = Yash's laptop · [LEADER] = the leader coordinator's laptop
+
+On this laptop:
+- Project folder:   ~/Desktop/ADBMS/distbank/multi
+- Demo scripts:     ~/Desktop/ADBMS/distbank/demo/  (helpers.zsh, watch-db.sh, transfer.sh; in the repo)
+- The pg / pgA / pgB helpers run psql inside THIS laptop's container pg-a2
+  (or pg-b2 if pg-a2 is not running). patronictl commands use pg-a2 too.
+
+
+================================================================================
+0. SETUP AND PRE-FLIGHT (before the professor arrives)
+================================================================================
+
+Step 0 [THIS LAPTOP] Docker must be running and this laptop's part of the
+cluster started (skip if `docker ps` already lists etcd-member, pg-a2, pg-b2,
+coordinator, dashboard, cand-haproxy):
+$ open -a Docker
+$ cd ~/Desktop/ADBMS/distbank/multi && ./cluster.sh node up pg-a2 pg-b2 && ./cluster.sh candidate up
+Note: the laptop whose nodes were primary when everyone shut down must be
+started first (its data is the newest). Until it is on, the other nodes wait
+as replicas on purpose.
+
+Step 1 [DASHBOARD] open in the browser:
+http://10.60.13.12:8080        (tabs: #rep #lb #tx #ft #av #rc)
+
+Step 2 [TERMINAL 1] live database view, leave it running all demo:
+$ ~/Desktop/ADBMS/distbank/demo/watch-db.sh
+
+Step 3 [TERMINAL 2] run these two lines in EVERY new terminal window:
+$ cd ~/Desktop/ADBMS/distbank/multi
+$ source ~/Desktop/ADBMS/distbank/demo/helpers.zsh
+Expected:
+DistBank helpers loaded: pg, pgA, pgB, primA, primB, leader
+
+Helpers:
+  pg HOST PORT "SQL" [db]   run SQL on one specific node (default db: bank)
+  pgA "SQL" [db]            run SQL on Branch A's current primary
+  pgB "SQL" [db]            run SQL on Branch B's current primary
+  primA / primB             print host and port of the current primary
+  leader                    print IP of the leader coordinator; use as $(leader)
+
+Optional, load helpers automatically in every new window (run once):
+$ echo 'source ~/Desktop/ADBMS/distbank/demo/helpers.zsh' >> ~/.zshrc
+
+Step 4 [TERMINAL] pre-flight checks:
+$ ./cluster.sh status
+$ ./cluster.sh leader
+$ docker exec etcd-member etcdctl endpoint health --cluster
+$ pgA "select sum(balance) from accounts"; pgB "select sum(balance) from accounts"
+$ pgA "select gid from pg_prepared_xacts"; pgB "select gid from pg_prepared_xacts"
+Expected:
+  pg-a1  10.60.14.88  primary  running      (2 primaries, 4 replicas, all running)
+  pg-a2  10.60.13.12  replica  running
+  pg-a3  10.60.1.152  replica  running
+  pg-b1  10.60.14.88  primary  running ...
+  Leader: {"name": "Harsh", ...}   Alive: Christy, Harsh, Yash
+  http://10.60.13.12:2379 is healthy ... (x3)
+  [Branch A primary = 10.60.14.88:5411]  1092985.00
+  [Branch B primary = 10.60.14.88:5421]  1107015.00      (A + B must be 2200000.00)
+  (0 rows)   (0 rows)                                     (nothing in doubt)
+
+Before starting: make sure nobody else is running customer traffic on a
+dashboard (tab #av). Raise the terminal font with Cmd +.
+
+
+================================================================================
+1. REPLICATION (dashboard tab #rep, about 2 minutes)
+================================================================================
+Every write goes to the primary and is streamed to all three laptops.
+One replica (sync) must confirm before a commit is acknowledged.
+
+Step 1 [TERMINAL] replication topology on Branch A's primary:
+$ pgA "select application_name, client_addr, state, sync_state, replay_lag from pg_stat_replication"
+Expected:
+ application_name | client_addr |   state   | sync_state
+ pg-a2            | 10.60.13.12 | streaming | async
+ pg-a3            | 10.60.1.152 | streaming | sync
+Say: The primary streams its write-ahead log to both replicas. pg-a3 is
+synchronous: no commit is acknowledged until it has the data.
+
+Step 2 [TERMINAL] read one account from each of the 3 copies directly (BEFORE):
+$ pg 10.60.14.88 5411 "select id, balance, pg_is_in_recovery() from accounts where id='A-1001'"
+$ pg 10.60.13.12 5412 "select id, balance, pg_is_in_recovery() from accounts where id='A-1001'"
+$ pg 10.60.1.152 5413 "select id, balance, pg_is_in_recovery() from accounts where id='A-1001'"
+Expected:
+ A-1001 | 5644.00 | f     (pg-a1: primary, Yash)
+ A-1001 | 5644.00 | t     (pg-a2: replica, this laptop)
+ A-1001 | 5644.00 | t     (pg-a3: replica, Christy)   all three must match
+
+Step 3 [DASHBOARD] tab #rep -> account A-1001 -> click "Deposit ₹100"
+Say: All three rows change together: "All 3 copies are identical".
+(Terminal alternative:)
+$ curl -s -X POST http://$(leader):8000/deposit -H 'content-type: application/json' -d '{"account":"A-1001","amount":100}' | python3 -m json.tool
+
+Step 4 [TERMINAL] run the 3 queries from step 2 again (AFTER):
+Expected:
+ A-1001 | 5744.00 | f
+ A-1001 | 5744.00 | t
+ A-1001 | 5744.00 | t     (+100 on all three laptops)
+
+Step 5 [TERMINAL] try to write directly on a replica (this laptop's pg-a2):
+$ pg 10.60.13.12 5412 "update accounts set balance = balance + 1 where id='A-1001'"
+Expected:
+ ERROR:  cannot execute UPDATE in a read-only transaction
+(If pg-a2 happens to be the primary at that moment, use Christy's replica
+instead: pg 10.60.1.152 5413 "...same update...")
+
+Step 6 [TERMINAL] the deposit's double-entry ledger rows:
+$ pgA "select txn_id, account_id, delta from ledger order by ctid desc limit 2"
+Expected:
+ c98d6e622254 | A-1001  |  100.00
+ c98d6e622254 | A-VAULT | -100.00
+
+PROVEN: one write on the primary appeared on all three laptops; replicas are
+read-only copies; one replica is synchronous.
+
+
+================================================================================
+2. LOAD BALANCING (dashboard tab #lb, about 2 minutes)
+================================================================================
+HAProxy sends writes to the primary and spreads reads round-robin over the
+replicas. It asks each node's Patroni API every 2 s which role it has.
+(Every laptop runs its own HAProxy; the commands below use THIS laptop's.)
+
+Step 1 [TERMINAL] the health checks HAProxy uses:
+$ for n in 10.60.14.88:8011 10.60.13.12:8012 10.60.1.152:8013; do echo "$n primary=$(curl -s -o /dev/null -w '%{http_code}' http://$n/primary) replica=$(curl -s -o /dev/null -w '%{http_code}' http://$n/replica)"; done
+Expected:
+ 10.60.14.88:8011 primary=200 replica=503     (pg-a1 is primary)
+ 10.60.13.12:8012 primary=503 replica=200
+ 10.60.1.152:8013 primary=503 replica=200
+
+Step 2 [TERMINAL] HAProxy session counters BEFORE (pool, node, total sessions, status):
+$ curl -s "http://localhost:8404/;csv" | cut -d, -f1,2,8,18 | grep -E 'branch_a_(read|write),pg'
+Expected:
+ branch_a_write,pg-a1,5017,UP
+ branch_a_write,pg-a2,0,DOWN
+ branch_a_write,pg-a3,0,DOWN
+ branch_a_read,pg-a1,0,DOWN        (primary excluded from reads on purpose)
+ branch_a_read,pg-a2,807,UP
+ branch_a_read,pg-a3,804,UP
+
+Step 3 [DASHBOARD] tab #lb -> Branch A -> click "Send 30 reads + 5 writes"
+Expected on the dashboard: primary 0 reads / 5 writes, each replica ~15 reads / 0 writes.
+Say: Every test request asks the database that answered it for its name, so
+these are exactly our 30 reads and 5 writes: about 15 reads on each replica,
+0 reads and all 5 writes on the primary.
+(Terminal alternative:)
+$ curl -s -X POST http://localhost:8080/api/loadtest -H 'content-type: application/json' -d '{"branch":"A","reads":30,"writes":5}' | python3 -m json.tool
+
+Step 4 [TERMINAL] run the counter command from step 2 again (AFTER):
+(HAProxy's totals also include the dashboard's own refresh and the
+coordinator's traffic, so the write total grows by MORE than 5. That is
+expected; the dashboard's bars from step 3 are the exact per-request count.)
+Expected:
+ branch_a_write,pg-a1,5031,UP      (+5 from the test, plus background traffic)
+ branch_a_read,pg-a1,0,DOWN        (unchanged)
+ branch_a_read,pg-a2,823,UP        (about +15)
+ branch_a_read,pg-a3,820,UP        (about +15)
+
+Step 5 [TERMINAL] a customer read is served by a replica:
+$ curl -s http://$(leader):8000/accounts/A-1001
+Expected:
+ {"id":"A-1001","owner":"Aarav","balance":5644.0,"served_by":"replica"}
+
+Step 6 [BROWSER] optional, this laptop's HAProxy stats page:
+http://10.60.13.12:8404
+
+PROVEN: reads were divided evenly between replicas, the primary took only
+writes, and routing is decided by Patroni's live role checks.
+
+
+================================================================================
+3. DISTRIBUTED TRANSACTION / TWO-PHASE COMMIT (dashboard tab #tx, about 3 minutes)
+================================================================================
+A transfer from Branch A to Branch B changes two separate databases. The
+coordinator runs 2PC so both halves commit, or neither does.
+
+Step 1 [TERMINAL] cross-branch transfer with every 2PC step:
+$ ~/Desktop/ADBMS/distbank/demo/transfer.sh A-1001 B-1001 500
+Expected:
+ Leader coordinator: {"status":"ok","name":"Harsh"} at 10.60.13.12
+ HTTP   : 200
+ txn_id : 9e28d72a2b83          <- copy this id for steps 2 and 3
+ kind   : 2pc
+ state  : COMMITTED
+ steps  :
+        230 ms  coordinator log: STARTED
+        467 ms  phase 1: PREPARE TRANSACTION ok on branch A (A-1001 -500)
+        602 ms  phase 1: PREPARE TRANSACTION ok on branch B (B-1001 +500)
+        750 ms  coordinator log: decision = COMMIT (durable)
+        836 ms  phase 2: COMMIT PREPARED on branch A: ok
+       1008 ms  phase 2: COMMIT PREPARED on branch B: ok
+       1074 ms  coordinator log: COMMITTED
+Say: Phase 1 prepares on both databases. Writing COMMITTING to the log is the
+commit point. Phase 2 commits both.
+
+Step 2 [TERMINAL] the coordinator's durable log entry (replace TXN with the txn_id):
+$ pgA "select txn_id, kind, from_account, to_account, amount, state from txn_log where txn_id='TXN'" coordlog
+Expected:
+ 9e28d72a2b83 | 2pc | A-1001 | B-1001 | 500.00 | COMMITTED
+
+Step 3 [TERMINAL] the two halves, one in each database (replace TXN):
+$ pgA "select txn_id, account_id, delta from ledger where txn_id='TXN'"
+$ pgB "select txn_id, account_id, delta from ledger where txn_id='TXN'"
+Expected:
+ [Branch A primary = 10.60.14.88:5411]  9e28d72a2b83 | A-1001 | -500.00
+ [Branch B primary = 10.60.14.88:5421]  9e28d72a2b83 | B-1001 |  500.00
+
+Step 4 [TERMINAL] overdraft: phase 1 fails, everything is rolled back:
+$ ~/Desktop/ADBMS/distbank/demo/transfer.sh A-1001 B-1001 50000
+$ pgA "select txn_id, kind, amount, state, note from txn_log order by created_at desc limit 1" coordlog
+Expected:
+ HTTP   : 409
+ error  : insufficient funds in A-1001
+ 2ebeed3df67f | 2pc | 50000.00 | ABORTED | insufficient funds in A-1001
+Say: The CHECK (balance >= 0) constraint failed during PREPARE, so the
+coordinator logged ABORT and rolled back. No ledger rows, no money moved.
+
+Step 5 [TERMINAL] a same-branch transfer needs no 2PC:
+$ ~/Desktop/ADBMS/distbank/demo/transfer.sh A-1001 A-1002 50
+Expected:
+ kind   : local
+ state  : COMMITTED
+        291 ms  local transaction committed on branch A
+
+Step 6 [DASHBOARD] tab #tx -> From A-1001, To B-1001, 500 -> "Send transfer"
+(visual timeline) -> then "Audit the ledger"
+
+Step 7 [TERMINAL] nothing left half-done, books balance, money conserved:
+$ pgA "select gid from pg_prepared_xacts"; pgB "select gid from pg_prepared_xacts"
+$ curl -s http://$(leader):8000/audit/reconcile | python3 -m json.tool
+$ pgA "select sum(balance) from accounts"; pgB "select sum(balance) from accounts"
+Expected:
+ (0 rows)   (0 rows)
+ { "ok": true, "checked_accounts": 22, "checked_ledger_txns": 408,
+   "checked_2pc_txns": 130, "mismatches": [] }
+ 1092985.00 + 1107015.00 = 2200000.00
+
+PROVEN: a cross-branch transfer committed on both databases under one
+transaction id; a failing transfer was aborted on both; the audit finds every
+2PC transfer complete on both sides; total money is unchanged.
+
+
+================================================================================
+5. AVAILABILITY (dashboard tab #av) - DO THIS BEFORE FEATURE 4
+================================================================================
+Customers keep being served while a node fails. Reads never stop; writes to
+the affected branch pause only while a new primary is elected.
+ORDER: start traffic here, do the kill in feature 4 part A while it runs,
+then come back to step 4 below.
+
+Step 1 [DASHBOARD] tab #av -> click "Start customer traffic"
+Say: One balance read and one Rs 1 transfer every second.
+
+Step 2 [TERMINAL] independent client loop (keep it running):
+$ L=$(leader); while true; do r=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://$L:8000/accounts/A-1003); w=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST http://$L:8000/transfer -H 'content-type: application/json' -d '{"from_account":"A-1003","to_account":"B-1003","amount":1}'); echo "$(date +%T) read=$r write=$w"; sleep 1; done
+Expected:
+ 19:18:40 read=200 write=200
+ 19:18:44 read=200 write=200
+Note: if you also kill the coordinator in feature 4 part C, restart this loop
+afterwards so L points at the new leader.
+
+Step 3 do feature 4 part A (kill Branch A's primary) and watch the loop:
+Expected:
+ 19:41:02 read=200 write=200
+ 19:41:03 read=200 write=503     <- primary killed: reads continue, Branch A writes refused
+    ...   read=200 write=503     (about 30-40 s while Patroni waits for the old leader key to expire)
+ 19:41:39 read=200 write=200     <- new primary elected: writes resume by themselves
+Say: Reads are served by replicas throughout. Writes pause only until the
+cluster is sure there is exactly one primary - the consistent choice under CAP.
+
+Step 4 [TERMINAL] press Ctrl-C to stop the loop, stop traffic on the
+dashboard, then check money is conserved:
+$ pgA "select sum(balance) from accounts"; pgB "select sum(balance) from accounts"
+$ curl -s http://$(leader):8000/audit/reconcile | python3 -m json.tool
+Expected:
+ A + B = 2200000.00      "ok": true, "mismatches": []
+
+PROVEN: during a primary failure the service kept answering reads, refused
+writes only briefly, recovered without anyone restarting anything, and lost
+or duplicated no money.
+
+
+================================================================================
+4. FAULT TOLERANCE (dashboard tab #ft, about 3 minutes)
+================================================================================
+A dead primary database or a dead leader coordinator is replaced
+automatically through elections in etcd.
+
+--- A. Database primary failover ---
+
+Step 1 [TERMINAL] note the current leader and timeline (TL):
+$ ./cluster.sh status
+$ docker exec pg-a2 patronictl list
+Expected:
+ | pg-a1 | 10.60.14.88:5411 | Leader       | running   | 19 |
+ | pg-a2 | 10.60.13.12:5412 | Replica      | streaming | 19 |
+ | pg-a3 | 10.60.1.152:5413 | Sync Standby | streaming | 19 |
+
+Step 2 [YASH] hard-kill the primary (use the real primary's name from step 1):
+$ cd ~/DistBank/multi && ./cluster.sh kill pg-a1 && date +%T
+Say: docker kill is a hard kill, like pulling the power plug.
+(If the primary is pg-a2, i.e. on THIS laptop, run here instead:
+ ./cluster.sh kill pg-a2 && date +%T   and use "docker exec pg-b2 patronictl ..."
+ for the rest of this feature; the pg helpers switch to pg-b2 by themselves.)
+
+Step 3 [TERMINAL] repeat every ~10 seconds until a new Leader appears (30-40 s):
+$ docker exec pg-a2 patronictl list
+Expected:
+ | pg-a1 | 10.60.14.88:5411 | Replica | stopped   |    |
+ | pg-a2 | 10.60.13.12:5412 | Replica | streaming | 20 |
+ | pg-a3 | 10.60.1.152:5413 | Leader  | running   | 20 |   (new leader, TL +1; could be pg-a2)
+Say: Patroni waits for the old primary's 30-second lease in etcd to expire, so
+two primaries can never exist. Then the synchronous replica, which has every
+acknowledged write, is promoted.
+
+Step 4 [TERMINAL] Patroni's own record of the failover:
+$ docker exec pg-a2 patronictl history | tail -4
+Expected:
+ | 18 | 151722288 | no recovery target specified | 2026-11-25T13:32:05+00:00 | pg-a1 |
+ | 19 | ...       | no recovery target specified | <today, UTC>              | pg-a3 |
+
+Step 5 [TERMINAL] writes now go to the new primary with no configuration change:
+$ primA
+$ ~/Desktop/ADBMS/distbank/demo/transfer.sh A-1004 B-1004 10
+Expected:
+ 10.60.1.152 5413      (the new primary)
+ state  : COMMITTED
+
+WARNING: the pg helpers and patronictl run inside THIS laptop's pg-a2
+(falling back to pg-b2), so never kill pg-a2 AND pg-b2 at the same time.
+
+--- B. etcd consensus ---
+
+Step 6 [TERMINAL] three etcd members, one Raft leader, all at the same index:
+$ docker exec etcd-member etcdctl endpoint status --cluster -w table
+Expected:
+ | http://10.60.1.152:2379 | ... | IS LEADER true  | RAFT TERM 14 | RAFT INDEX 6276 |
+ | http://10.60.13.12:2379 | ... | IS LEADER false | RAFT TERM 14 | RAFT INDEX 6276 |
+ | http://10.60.14.88:2379 | ... | IS LEADER false | RAFT TERM 14 | RAFT INDEX 6276 |
+Say: etcd needs 2 of 3 members to agree, so any one laptop can fail.
+
+--- C. Coordinator failover ---
+
+Step 7 [TERMINAL] see who leads:
+$ ./cluster.sh leader
+Expected:
+ Leader: {"name": "Harsh", "url": "http://10.60.13.12:8000", ...}
+ Alive: Christy, Harsh, Yash
+
+Step 8 [LEADER] kill the leader coordinator (if the leader is Harsh, that is
+THIS laptop, so run it right here):
+$ docker kill coordinator && date +%T
+
+Step 9 [TERMINAL] repeat until a new name is Leader (about 15 s; we measured 16 s):
+$ ./cluster.sh leader
+Expected:
+ Leader: {"name": "Yash", ...}      (a different laptop)
+
+Step 10 [NEW LEADER'S LAPTOP] show the election in its log:
+$ docker logs --tail 20 coordinator | grep -E 'election|recovery'
+Expected:
+ [election] Yash is the new leader: running crash recovery from the log
+ [recovery] finished, nothing in doubt
+ [election] Yash is serving transfers
+Say: Each coordinator holds a 15-second lease in etcd. The leader key can only
+be created if absent, so there is exactly one winner. A leader that cannot
+renew steps down first.
+
+PROVEN: both the database primary and the coordinator leader were replaced
+automatically, the timeline increased, and etcd kept a single agreed view.
+
+
+================================================================================
+6. RECOVERY (dashboard tab #rc, about 3 minutes)
+================================================================================
+If the coordinator crashes in the middle of a 2PC transfer, the next leader
+finishes it from the durable log. A crashed database node rejoins as a replica.
+FIRST: stop customer traffic (tab #av) and make sure ./cluster.sh leader shows
+at least 2 coordinators alive (restart a killed one with "docker start
+coordinator" on its laptop).
+
+--- A. Coordinator crashes in the middle of a transfer ---
+
+Step 1 [DASHBOARD] tab #rc -> choose "After logging COMMIT" -> click "Send & crash coordinator"
+(Terminal alternative - crashes the leader on purpose:)
+$ curl -s -m 5 -X POST http://$(leader):8000/transfer -H 'content-type: application/json' -d '{"from_account":"A-1001","to_account":"B-1001","amount":500,"fault":"crash_after_decision"}'
+
+Step 2 [TERMINAL] immediately (within 15 s): the transfer is stuck in doubt on BOTH branches:
+$ pgA "select gid, prepared from pg_prepared_xacts"; pgB "select gid, prepared from pg_prepared_xacts"
+$ pgA "select txn_id, state from txn_log order by created_at desc limit 1" coordlog
+Expected:
+ [Branch A primary ...]  bank-5bf47433d643 | 2026-11-25 ...
+ [Branch B primary ...]  bank-5bf47433d643 | 2026-11-25 ...
+ 5bf47433d643 | COMMITTING
+Say: Both branches promised to commit and hold their row locks. They may not
+decide alone - this is the blocking problem of 2PC.
+
+Step 3 [TERMINAL] after 15-20 s: a new leader has finished the transfer from the log:
+$ ./cluster.sh leader
+$ pgA "select gid from pg_prepared_xacts"; pgB "select gid from pg_prepared_xacts"
+$ pgA "select txn_id, state, note from txn_log order by updated_at desc limit 1" coordlog
+Expected:
+ Leader: {"name": "Yash", ...}
+ (0 rows)   (0 rows)
+ 5bf47433d643 | COMMITTED | resolved by recovery: COMMIT PREPARED on A, B
+
+Step 4 [NEW LEADER'S LAPTOP] show recovery in its log:
+$ docker logs --tail 20 coordinator | grep -E 'election|recovery'
+Expected:
+ [election] Yash is the new leader: running crash recovery from the log
+ [recovery] txn 5bf47433d643: log says COMMITTING -> COMMIT PREPARED on A, B -> COMMITTED
+Say: The new coordinator never saw this transfer. It finished it only by
+reading the durable log.
+
+Step 5 [CRASHED LAPTOP] bring the crashed coordinator back (rejoins as standby):
+$ docker start coordinator
+(If Harsh was the leader that crashed, run it on THIS laptop.)
+
+Step 6 [DASHBOARD] repeat with "Before deciding", then check after 15-20 s:
+(Terminal alternative:)
+$ curl -s -m 5 -X POST http://$(leader):8000/transfer -H 'content-type: application/json' -d '{"from_account":"A-1001","to_account":"B-1001","amount":500,"fault":"crash_before_decision"}'
+$ pgA "select txn_id, state, note from txn_log order by updated_at desc limit 1" coordlog
+Expected:
+ 2388d4af5f55 | ABORTED | resolved by recovery: ROLLBACK PREPARED on A, B
+Say: No decision was logged, so the safe choice is to roll back on both
+branches - presumed abort.
+(Then run "docker start coordinator" again on the laptop that crashed.)
+
+Step 7 [TERMINAL] all transfers ever finished by recovery:
+$ pgA "select txn_id, state, note, updated_at from txn_log where note like 'resolved by recovery%' order by updated_at desc limit 10" coordlog
+Expected:
+ 2388d4af5f55 | ABORTED   | resolved by recovery: ROLLBACK PREPARED on A, B | ...
+ 5bf47433d643 | COMMITTED | resolved by recovery: COMMIT PREPARED on A, B   | ...
+
+--- B. The killed database node rejoins ---
+
+Step 8 [YASH] start the node killed in feature 4:
+$ cd ~/DistBank/multi && ./cluster.sh start pg-a1
+(If the killed node was pg-a2 on THIS laptop: ./cluster.sh start pg-a2)
+
+Step 9 [TERMINAL] repeat until it is streaming again (usually under a minute):
+$ docker exec pg-a2 patronictl list
+$ pg 10.60.14.88 5411 "select id, balance, pg_is_in_recovery() from accounts where id='A-1001'"
+Expected:
+ | pg-a1 | 10.60.14.88:5411 | Replica | streaming | 20 | ... | 0 |
+ A-1001 | <same balance as the primary> | t
+Say: The old primary rewound its diverged history with pg_rewind and is now a
+replica of the new primary, with every change it missed.
+
+If it stays "starting" for more than 3 minutes and "docker logs pg-a1" repeats
+"End of WAL reached on timeline N", reinitialize it from the primary (only
+while its branch has a primary and another running replica). On Yash's laptop:
+$ curl -s -X POST http://localhost:8011/reinitialize -H 'Content-Type: application/json' -d '{"force": true}'
+(For pg-a2 on THIS laptop the port is 8012, for pg-b2 it is 8022.)
+
+PROVEN: transfers interrupted by a coordinator crash were committed or rolled
+back on both branches according to the log, and a failed database node
+rejoined automatically with no data lost.
+
+
+================================================================================
+CLOSE
+================================================================================
+
+Step 1 [TERMINAL] final proof: books balance, no money lost:
+$ curl -s http://$(leader):8000/audit/reconcile | python3 -m json.tool
+$ pgA "select sum(balance) from accounts"; pgB "select sum(balance) from accounts"
+Expected:
+ "ok": true, "mismatches": []        A + B = 2200000.00
+
+Step 2 [DASHBOARD] tab #tx -> "Audit the ledger" -> "Books balance";
+banner shows Rs 22,00,000.00
+
+
+================================================================================
+RESET AFTER EVERY REHEARSAL
+================================================================================
+$ ./cluster.sh start <killed node>          (on that node's laptop)
+$ docker start coordinator                   (on any laptop where it was killed)
+$ ./cluster.sh status                        (2 primaries, 4 replicas, all running)
+$ ./cluster.sh leader                        (1 leader, 3 alive)
+
+NEVER RUN: docker volume rm · docker system prune · ./cluster.sh reset ·
+docker compose down -v   (they delete the bank's data)
+
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+command not found: pgA
+  -> run: source ~/Desktop/ADBMS/distbank/demo/helpers.zsh   (in that terminal window)
+
+no local database container (pg-a2 / pg-b2) is running
+  -> start them: cd ~/Desktop/ADBMS/distbank/multi && ./cluster.sh node up pg-a2 pg-b2
+
+zsh: command not found: select ...
+  -> the command was split over several lines when pasting. Paste it as ONE line.
+
+leader prints NONE
+  -> a coordinator election is in progress; wait 15 s. If it persists,
+     run "docker start coordinator" on each laptop.
+
+pgA prints nothing / connection error
+  -> Branch A is mid-failover; wait 30-40 s and retry.
+     Check: docker exec pg-a2 patronictl list
+
+./cluster.sh status shows a node stopped
+  -> on its laptop: ./cluster.sh start <node>
+
+Nodes stay "replica" after everyone starts, log says "not the healthiest node"
+  -> the laptop whose nodes were primary at shutdown is not on yet; it holds
+     the newest data. Start that laptop; the others then follow by themselves.
+
+Nodes exit right after starting ("No more machines in the cluster")
+  -> etcd has no majority: at least 2 laptops must be on the same Wi-Fi.
+     Check: docker exec etcd-member etcdctl endpoint health --cluster
+
+Docker is not running ("Cannot connect to the Docker daemon")
+  -> open -a Docker, wait ~30 s, then: ./cluster.sh node up pg-a2 pg-b2 && ./cluster.sh candidate up
+
+A laptop's IP changed
+  -> update cluster.env identically on every laptop, or reconnect to the
+     original network.
+
+
+================================================================================
+LAPTOPS AND PORTS
+================================================================================
+Laptop    IP            Branch A node (pg / Patroni)   Branch B node (pg / Patroni)
+Yash      10.60.14.88   pg-a1  5411 / 8011             pg-b1  5421 / 8021
+Harsh     10.60.13.12   pg-a2  5412 / 8012             pg-b2  5422 / 8022   <- THIS LAPTOP
+Christy   10.60.1.152   pg-a3  5413 / 8013             pg-b3  5423 / 8023
+
+Every laptop also runs etcd (2379), a coordinator (8000), HAProxy stats (8404)
+and the dashboard (8080). This laptop's dashboard: http://10.60.13.12:8080
