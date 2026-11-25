@@ -317,6 +317,7 @@ def api_loadtest(req: LoadTest):
             except Exception:
                 conn = db.connect_branch(b, "write", **su)       # no replica left: primary answers
             with conn:
+                conn.execute("SELECT count(*) FROM accounts").fetchone()
                 served_by(conn, "reads")
             reads_ok += 1
         except Exception:
@@ -380,6 +381,33 @@ def api_reconcile():
         return JSONResponse(r.json(), status_code=r.status_code)
     except Exception as e:
         return JSONResponse({"detail": f"coordinator unreachable ({type(e).__name__})"}, status_code=502)
+
+
+@app.get("/api/ledger")
+def api_ledger(limit: int = 15):
+    """Recent ledger rows from both branches (read from replicas)."""
+    out = {}
+    for b in ("A", "B"):
+        try:
+            with db.connect_read(b) as c:
+                rows = c.execute(
+                    "SELECT id, txn_id, account_id, delta, created_at "
+                    "FROM ledger ORDER BY id DESC LIMIT %s",
+                    (limit,),
+                ).fetchall()
+            out[b] = [
+                {
+                    "id": r[0],
+                    "txn_id": r[1],
+                    "account_id": r[2],
+                    "delta": f"{r[3]:.2f}",
+                    "created_at": r[4].isoformat() if r[4] else None,
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            out[b] = {"error": str(e)}
+    return out
 
 
 @app.get("/", response_class=HTMLResponse)
