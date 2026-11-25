@@ -43,46 +43,48 @@
 
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
   .num { font-variant-numeric: tabular-nums; }
   .mono { font-family: var(--mono); font-size: .92em; }
   b { font-weight: 650; }
 
   /* top bar */
   .topbar { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
-  .topbar-in { max-width: 1320px; margin: 0 auto; padding: 10px 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; }
-  .logo { width: 30px; height: 30px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; }
+  .topbar-in { max-width: 1680px; margin: 0 auto; padding: 12px 28px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 11px; font-weight: 700; font-size: 19px; letter-spacing: -.01em; }
+  .brand-sub { font-size: 12px; font-weight: 500; color: var(--muted); display: block; line-height: 1.1; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: var(--accent); display: grid; place-items: center; }
   .spacer { flex: 1; }
-  .chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 600;
-          border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px; font-size: 13.5px; font-weight: 600;
+          border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); white-space: nowrap; text-decoration: none; }
+  a.chip:hover { border-color: var(--accent); color: var(--accent); }
   .chip.on { border-color: var(--ok-line); background: var(--ok-soft); color: var(--ok); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; display: inline-block; }
   .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
   .dot.live { animation: pulse 2s infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
-  .iconbtn { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink-2); cursor: pointer; font: inherit; }
+  .iconbtn { height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink-2); cursor: pointer; font: inherit; }
 
-  main { max-width: 1320px; margin: 0 auto; padding: 20px 24px 48px; display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 18px 20px; min-width: 0; }
+  main { max-width: 1680px; margin: 0 auto; padding: 22px 28px 52px; display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); padding: 20px 24px; min-width: 0; }
   .card-h { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; flex-wrap: wrap; }
-  .card-h h2 { font-size: 16px; font-weight: 650; margin: 0; }
+  .card-h h2 { font-size: 17px; font-weight: 650; margin: 0; }
   .card-h .sub { color: var(--muted); font-size: 13.5px; }
   .card-h .right { margin-left: auto; }
 
   /* status row */
-  .status { display: grid; grid-template-columns: 1.6fr repeat(3, 1fr); gap: 14px; }
-  .total { border-radius: 16px; padding: 16px 20px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); transition: background .4s, border-color .4s; }
+  .status { display: grid; grid-template-columns: 1.6fr repeat(3, 1fr); gap: 16px; }
+  .total { border-radius: 16px; padding: 18px 22px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); transition: background .4s, border-color .4s; }
   .total.ok { background: var(--ok-soft); border-color: var(--ok-line); }
   .total.warn { background: var(--warn-soft); border-color: var(--warn-line); }
   .total.bad { background: var(--bad-soft); border-color: var(--bad-line); }
-  .total .k { color: var(--ink-2); font-size: 13.5px; font-weight: 500; }
-  .total .amount { font-size: 34px; font-weight: 750; letter-spacing: -.02em; line-height: 1.15; }
-  .total .verdict { font-size: 13.5px; font-weight: 650; margin-top: 2px; }
+  .total .k { color: var(--ink-2); font-size: 14px; font-weight: 500; }
+  .total .amount { font-size: 40px; font-weight: 750; letter-spacing: -.02em; line-height: 1.15; }
+  .total .verdict { font-size: 14px; font-weight: 650; margin-top: 3px; }
   .total.ok .verdict { color: var(--ok); } .total.warn .verdict { color: var(--warn); } .total.bad .verdict { color: var(--bad); }
-  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow); }
-  .stat .k { color: var(--muted); font-size: 13px; font-weight: 500; }
-  .stat .v { font-size: 26px; font-weight: 700; margin-top: 2px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 16px 20px; box-shadow: var(--shadow); }
+  .stat .k { color: var(--muted); font-size: 13.5px; font-weight: 500; }
+  .stat .v { font-size: 30px; font-weight: 700; margin-top: 3px; }
   .stat .v small { font-size: 14px; color: var(--muted); font-weight: 600; }
   .stat.alert { border-color: var(--warn-line); background: var(--warn-soft); }
   .stat.badbox { border-color: var(--bad-line); background: var(--bad-soft); }
@@ -112,8 +114,8 @@
   .badge.other { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn-line); }
 
   /* demo guide */
-  .demo { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
-  .tabs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; padding: 5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 18px; }
+  .demo { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+  .tabs { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; padding: 5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 18px; }
   .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 58px; padding: 6px 4px; border: 0; border-radius: 10px; background: transparent;
          color: var(--ink-2); font: inherit; font-weight: 600; font-size: 13px; line-height: 1.2; text-align: center; cursor: pointer; }
   .tab .n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--line); color: var(--ink-2); }
@@ -221,12 +223,14 @@
 <header class="topbar">
   <div class="topbar-in">
     <div class="brand">
-      <div class="logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6M5 11v8M10 11v8M14 11v8M19 11v8M3 21h18"/></svg></div>
-      Distributed Bank
+      <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6M5 11v8M10 11v8M14 11v8M19 11v8M3 21h18"/></svg></div>
+      <div>Distributed Bank<span class="brand-sub">PostgreSQL 16 · Patroni · etcd Raft · HAProxy · 2PC</span></div>
     </div>
     <span class="chip" id="coord"><span class="dot"></span>Coordinator</span>
     <span class="chip on" id="traffic-chip" style="display:none"><span class="dot ok live"></span>Customer traffic running</span>
     <span class="spacer"></span>
+    <a class="chip" id="link-haproxy" href="#" target="_blank" rel="noopener">HAProxy :8404</a>
+    <a class="chip" id="link-api" href="#" target="_blank" rel="noopener">API Docs :8000</a>
     <span class="chip"><span class="dot ok live" id="livedot"></span><span id="updated">Live</span></span>
     <button class="iconbtn" id="theme" type="button" title="Light / dark">◐</button>
   </div>
@@ -259,6 +263,7 @@
         <button class="tab" data-tab="ft"><span class="n">4</span>Fault tolerance</button>
         <button class="tab" data-tab="av"><span class="n">5</span>Availability</button>
         <button class="tab" data-tab="rc"><span class="n">6</span>Recovery</button>
+        <button class="tab" data-tab="db"><span class="n">7</span>Database</button>
       </nav>
 
       <!-- 1. REPLICATION -->
@@ -389,6 +394,21 @@
           <div id="rc-out"></div>
         </div>
       </div>
+
+      <!-- 7. DATABASE INSPECTOR -->
+      <div class="panel" data-panel="db">
+        <div>
+          <h3>Accounts (<span class="mono">bank.accounts</span>)</h3>
+          <div id="db-accounts" class="muted">Loading…</div>
+        </div>
+        <div class="proof">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+            <h3 style="margin:0">Recent ledger (<span class="mono">bank.ledger</span>)</h3>
+            <button class="btn ghost" id="db-refresh" style="padding:5px 10px;font-size:12.5px">Refresh</button>
+          </div>
+          <div id="db-ledger" class="muted">Loading…</div>
+        </div>
+      </div>
     </div>
 
     <aside class="card">
@@ -507,6 +527,7 @@ function render(s) {
   renderTxList(s);
   renderFailover(s);
   renderRecovery(s, doubt);
+  renderDbAccounts(s);
   detectEvents(s, doubt);
 }
 
@@ -852,6 +873,53 @@ function renderRecovery(s, doubt) {
   $("rc-out").innerHTML = html;
 }
 
+/* ---------------- 7. database inspector ---------------- */
+function renderDbAccounts(s) {
+  const el = $("db-accounts");
+  if (!el) return;
+  const blocks = Object.entries(s.branches).map(([k, b]) => {
+    const rows = (b.accounts || []).map(a =>
+      `<tr><td class="mono"><b>${esc(a.id)}</b></td><td>${esc(a.owner)}</td><td class="r num">${money(a.balance)}</td></tr>`
+    ).join("");
+    return `<div style="margin-bottom:14px">
+      <div class="muted" style="font-size:12.5px;margin-bottom:4px"><b>${esc(b.name)}</b> · total ${money(b.total)}</div>
+      <table class="t"><tr><th>Account</th><th>Owner</th><th class="r">Balance</th></tr>${rows || '<tr><td colspan="3" class="muted">Unavailable</td></tr>'}</table>
+    </div>`;
+  }).join("");
+  el.innerHTML = blocks;
+}
+
+async function loadLedger() {
+  const el = $("db-ledger");
+  if (!el) return;
+  try {
+    const r = await fetch("/api/ledger?limit=10", { cache: "no-store" });
+    const d = await r.json();
+    el.innerHTML = ["A", "B"].map(k => {
+      const items = d[k];
+      if (!Array.isArray(items)) return `<div class="muted">Branch ${k}: unavailable</div>`;
+      const rows = items.map(x => {
+        const pos = Number(x.delta) >= 0;
+        return `<tr>
+          <td class="muted mono" style="font-size:12px">${esc(clock(x.created_at))}</td>
+          <td class="mono">${esc(x.account_id)}</td>
+          <td class="r num" style="color:${pos ? "var(--ok)" : "var(--bad)"};font-weight:650">${pos ? "+" : ""}${money(x.delta)}</td>
+          <td class="muted mono" style="font-size:11.5px">${esc(x.txn_id)}</td>
+        </tr>`;
+      }).join("");
+      return `<div style="margin-bottom:14px">
+        <div class="muted" style="font-size:12.5px;margin-bottom:4px"><b>Branch ${k}</b> (last 10 entries)</div>
+        <table class="t"><tr><th>Time</th><th>Account</th><th class="r">Delta</th><th>Txn</th></tr>${rows || '<tr><td colspan="4" class="muted">No entries yet.</td></tr>'}</table>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="muted">Could not load ledger.</div>`;
+  }
+}
+$("db-refresh").onclick = loadLedger;
+document.querySelector('[data-tab="db"]').addEventListener("click", loadLedger);
+loadLedger();
+
 /* ---------------- poll ---------------- */
 async function poll() {
   try {
@@ -868,6 +936,8 @@ async function poll() {
   }
   setTimeout(poll, 1000);
 }
+$("link-haproxy").href = `http://${location.hostname}:8404`;
+$("link-api").href = `http://${location.hostname}:8000/docs`;
 showTab(activeTab);
 poll();
 </script>
