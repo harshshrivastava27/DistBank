@@ -289,38 +289,49 @@ class LoadTest(BaseModel):
 
 @app.post("/api/loadtest")
 def api_loadtest(req: LoadTest):
-    """Load-balancing demo: send reads and writes through HAProxy, then report
-    how many connections each node received (from HAProxy's own counters)."""
+    """Load-balancing demo: send reads and writes through HAProxy and record, for
+    EACH of these requests, which node actually answered it.
+
+    Every node's container hostname is its node name (pg-a1, pg-a2, ...), so the
+    answering node identifies itself with pg_read_file('/etc/hostname'). The
+    counts therefore include only this test's own requests, not the dashboard's
+    background refresh or the coordinator's traffic that HAProxy's totals also
+    contain. (Reading a server file needs the superuser role.)"""
     b = req.branch.upper()
     if b not in config.BRANCHES:
         raise HTTPException(400, f"unknown branch {req.branch!r}; use one of {', '.join(config.BRANCHES)}")
     cfg = config.BRANCHES[b]
-    before = safe(haproxy_view, default={})
+    su = {"user": config.PG_SUPERUSER, "password": config.PG_SUPERUSER_PASSWORD}
+    who = "SELECT trim(both E'\\n' from pg_read_file('/etc/hostname'))"
+    counts = {n: {"reads": 0, "writes": 0} for n in cfg["nodes"]}
+
+    def served_by(conn, kind):
+        node = conn.execute(who).fetchone()[0]
+        counts.setdefault(node, {"reads": 0, "writes": 0})[kind] += 1
+
     reads_ok = 0
     for _ in range(max(0, min(req.reads, 100))):
         try:
-            with db.connect_read(b) as c:
-                c.execute("SELECT count(*) FROM accounts").fetchone()
+            try:
+                conn = db.connect_branch(b, "read", **su)        # HAProxy's read pool (replicas)
+            except Exception:
+                conn = db.connect_branch(b, "write", **su)       # no replica left: primary answers
+            with conn:
+                served_by(conn, "reads")
             reads_ok += 1
         except Exception:
             pass
     writes_ok = 0
     for _ in range(max(0, min(req.writes, 20))):          # touches a timestamp only: no money moves
         try:
-            with db.connect_branch(b, "write") as c:
-                c.execute("UPDATE accounts SET updated_at = now() WHERE id = %s", (config.vault_of(b),))
+            with db.connect_branch(b, "write", **su) as conn:
+                conn.execute("UPDATE accounts SET updated_at = now() WHERE id = %s", (config.vault_of(b),))
+                served_by(conn, "writes")
             writes_ok += 1
         except Exception:
             pass
-    after = safe(haproxy_view, default={})
-
-    def delta(proxy, node):
-        get = lambda v: v.get(proxy, {}).get(node, {}).get("sessions", 0)
-        return max(0, get(after) - get(before))
-
-    return {"branch": b, "reads_ok": reads_ok, "writes_ok": writes_ok,
-            "nodes": [{"name": n, "reads": delta(cfg["haproxy_read"], n),
-                       "writes": delta(cfg["haproxy_write"], n)} for n in cfg["nodes"]]}
+    return {"branch": b, "reads_ok": reads_ok, "writes_ok": writes_ok, "method": "each request names its node",
+            "nodes": [{"name": n, **c} for n, c in counts.items()]}
 
 
 @app.get("/api/account/{account_id}")

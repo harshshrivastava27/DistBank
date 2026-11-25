@@ -290,10 +290,10 @@
               <div class="ctrl"><button class="btn" id="lb-go">Send 30 reads + 5 writes</button></div></li>
             <li>Point at the bars: <b>reads are split between the replicas</b>, <b>writes all land on the primary</b>.</li>
           </ol>
-          <p class="look">Numbers come from HAProxy's own counters. The dashboard's background refresh adds a few extra connections.</p>
+          <p class="look">Every test request asks the database that answered it for its name, so the bars count exactly this test's 30 reads and 5 writes, and nothing else. HAProxy's own totals (stats page) also include the dashboard's background traffic.</p>
         </div>
         <div class="proof">
-          <h3>Connections each node received</h3>
+          <h3>Which node answered each request</h3>
           <div id="lb-out" class="muted">Click the button to run the test.</div>
         </div>
       </div>
