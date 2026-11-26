@@ -37,3 +37,8 @@ services:
 
 volumes:
   etcd-data:
+    # One data volume per member address. etcd stores its members' addresses
+    # inside its data, so after the laptops' IPs change the old data cannot
+    # be reused: a new address simply gets a new, empty volume (the old one
+    # stays on disk untouched, nothing is deleted).
+    name: distbank-etcd-data-${ETCD_MEMBER}
